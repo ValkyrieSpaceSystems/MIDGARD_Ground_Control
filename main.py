@@ -2434,6 +2434,7 @@ High Priority:
     Added radio communication and NORN protocol compatibility
     Add new sensors and data types
     Add servo control and alignment
+    Add linux "shift" key detect
 Medium Priority:
     Go thru procedure to add more safety checks (igniter cond_false hotfire and hotfire lock, hotfire manually sets igniter? check for spaces or invalid characters in names)
 Low Priority:
