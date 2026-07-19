@@ -1,0 +1,16 @@
+# docker run -p 9090:9090 --listen=localhost:9090 --insecure --license-key=##########################
+# synnax start --listen=localhost:9090 --insecure --license-key=##########################
+
+services:
+  synnax:
+    image: synnaxlabs/synnax:latest
+    container_name: synnax
+    restart: unless-stopped
+    ports:
+      - 9090:9090
+    environment:
+      - SYNNAX_LISTEN=localhost:9090
+      - SYNNAX_INSECURE=true
+      - SYNNAX_LICENSE_KEY=##########################
+    labels:
+      autoheal-app: true
