@@ -1,0 +1,110 @@
+[meta]
+name = "Rocket"
+description = "Generic Rocket"
+type = "rocket"
+
+# ── Lockouts ───────────────────────────────────────────────────────────
+[[lockout]]
+id = "abort"
+name = "Abort"
+description = "Emergency shutdown"
+default = false
+
+[[lockout]]
+id = "main_lock"
+name = "Main Lockout"
+description = "Disarms all other lockouts and actuators"
+default = false
+armed_by = [] # all must be true
+disarmed_by = ["lockout.abort"] # all must be false
+
+# ── Status ─────────────────────────────────────────────────────────────
+[[status]]
+id = "startup"
+name = "Startup"
+description = "Vehicle is powering on"
+triggers = ["event.startup"]
+
+[[status]]
+id = "pad"
+name = "Pad"
+description = "Vehicle on pad, awaiting terminal"
+triggers = ["event.pad"]
+
+[[status]]
+id = "terminal"
+name = "Terminal"
+description = "Vehicle in countdown, awaiting launch"
+triggers = ["event.terminal"]
+
+[[status]]
+id = "ascent"
+name = "Ascent"
+description = "Vehicle has begun burn"
+triggers = ["event.launch"]
+
+[[status]]
+id = "coast"
+name = "Coast"
+description = "Vehicle is no longer under thrust"
+triggers = ["event.burnout"]
+
+[[status]]
+id = "descent"
+name = "Descent"
+description = "Vehicle has reach apogee and is now descending"
+triggers = ["event.apogee"]
+
+[[status]]
+id = "landed"
+name = "Landed"
+description = "Vehicle has touched down"
+triggers = ["event.landed"]
+
+# ── Events ─────────────────────────────────────────────────────────────
+[[event]]
+id = "startup"
+description = "Flight computer startup and systems check complete"
+default = true
+conflicts = ["event.pad", "event.terminal", "event.launch", "event.burnout", "event.apogee", "event.landed"]
+
+[[event]]
+id = "pad"
+description = "Vehicle on pad"
+default = false
+conflicts = ["event.launch", "event.burnout", "event.apogee", "event.landed"]
+
+[[event]]
+id = "terminal"
+description = "Terminal countdown initiated"
+default = false
+prerequisites = ["event.pad"]
+conflicts = ["event.launch", "event.burnout", "event.apogee", "event.landed"]
+
+[[event]]
+id = "launch"
+description = "Launch detected, motor ignition confirmed"
+default = false
+prerequisites = ["event.terminal"]
+conflicts = ["event.burnout", "event.apogee", "event.landed"]
+
+[[event]]
+id = "burnout"
+description = "Motor burnout confirmed"
+default = false
+prerequisites = ["event.launch"]
+conflicts = ["event.apogee", "event.landed"]
+
+[[event]]
+id = "apogee"
+description = "Apogee confirmed"
+default = false
+prerequisites = ["event.burnout"]
+conflicts = ["event.landed"]
+
+[[event]]
+id = "landed"
+description = "Touchdown confirmed"
+default = false
+prerequisites = ["event.apogee"]
+

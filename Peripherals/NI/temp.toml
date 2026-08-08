@@ -1,0 +1,9 @@
+[[data]]
+id = "baro_1"
+type = "pressure"
+unit = "Pa"
+range = [10_000.0, 110_000.0]
+nominal = [80_000.0, 102_000.0]
+calibration.scale = 1.0023
+calibration.offset = -0.004
+sample_rate_hz = 100

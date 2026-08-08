@@ -1,0 +1,297 @@
+[meta]
+name = "ASGARD V0.2"
+description = "Generic ASGARD V0.2"
+type = "rocket"
+notes = ""
+parent = "rocket"
+
+# ── Interfaces ─────────────────────────────────────────────────────────
+[[interface]]
+id = "elrs"
+type = "radio"
+protocol = "elrs"
+freq = 915_000_000
+baud = 57600
+
+# ── Lockouts ───────────────────────────────────────────────────────────
+[[lockout]]
+id = "pyro_arm"
+name = "Pyro Arm"
+description = "Arms Pyro Channels"
+default = false
+armed_by = ["lockout.main_lock"] # all must be true
+disarmed_by = ["lockout.abort", "status.pad", "status.landed"] # all must be false
+debug_only = true
+
+[[lockout]]
+id = "servo_arm"
+name = "Servo Arm"
+description = "Arms Servos"
+default = false
+armed_by = ["lockout.main_lock"] # all must be true
+disarmed_by = ["lockout.abort", "status.landed"] # all must be false
+
+[[lockout]]
+id = "launch_arm"
+name = "Launch Arm"
+description = "Arms For Launch"
+default = false
+armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.servo_arm"] # all must be true
+disarmed_by = ["lockout.abort", "status.pad", "status.landed"] # all must be false
+
+# ── POSITION ───────────────────────────────────────────────────────────
+[[data]]
+id = "pos_x"
+type = "position"
+axis = "x"
+unit = "m"
+range = [-50_000.0, 50_000.0]
+nominal = [-5_000.0, 5_000.0]
+
+[[data]]
+id = "pos_y"
+type = "position"
+axis = "y"
+unit = "m"
+range = [-50_000.0, 50_000.0]
+nominal = [-5_000.0, 5_000.0]
+
+[[data]]
+id = "pos_z"
+type = "position"
+axis = "z"
+unit = "m"
+range = [-500.0, 100_000.0]
+nominal = [0.0, 30_000.0]
+
+# ── VELOCITY ───────────────────────────────────────────────────────────
+[[data]]
+id = "vel_x"
+type = "velocity"
+axis = "x"
+unit = "m/s"
+range = [-2_000.0, 2_000.0]
+nominal = [-500.0, 500.0]
+
+[[data]]
+id = "vel_y"
+type = "velocity"
+axis = "y"
+unit = "m/s"
+range = [-2_000.0, 2_000.0]
+nominal = [-500.0, 500.0]
+
+[[data]]
+id = "vel_z"
+type = "velocity"
+axis = "z"
+unit = "m/s"
+range = [-2_000.0, 2_000.0]
+nominal = [-500.0, 500.0]
+
+# ── ACCELERATION ───────────────────────────────────────────────────────
+[[data]]
+id = "accel_x"
+type = "acceleration"
+axis = "x"
+unit = "m/s^2"
+range = [-160.0, 160.0]
+nominal = [-20.0, 20.0]
+
+[[data]]
+id = "accel_y"
+type = "acceleration"
+axis = "y"
+unit = "m/s^2"
+range = [-160.0, 160.0]
+nominal = [-20.0, 20.0]
+
+[[data]]
+id = "accel_z"
+type = "acceleration"
+axis = "z"
+unit = "m/s^2"
+range = [-160.0, 160.0]
+nominal = [-20.0, 20.0]
+
+# ── ATTITUDE ───────────────────────────────────────────────────────────
+[[data]]
+id = "pitch"
+type = "attitude"
+axis = "pitch"
+unit = "deg"
+range = [-180.0, 180.0]
+nominal = [-30.0, 30.0]
+
+[[data]]
+id = "roll"
+type = "attitude"
+axis = "roll"
+unit = "deg"
+range = [-180.0, 180.0]
+nominal = [-30.0, 30.0]
+
+[[data]]
+id = "yaw"
+type = "attitude"
+axis = "yaw"
+unit = "deg"
+range = [-180.0, 180.0]
+nominal = [-180.0, 180.0]
+
+# ── HEADING ────────────────────────────────────────────────────────────
+[[data]]
+id = "heading"
+type = "heading"
+unit = "deg"
+range = [0.0, 360.0]
+nominal = [0.0, 360.0]
+
+# ── PRESSURE ───────────────────────────────────────────────────────────
+[[data]]
+id = "static_pressure"
+type = "pressure"
+unit = "Pa"
+range = [10_000.0, 110_000.0]
+nominal = [80_000.0, 102_000.0]
+
+# ── GPS ────────────────────────────────────────────────────────────────
+[[data]]
+id = "gps_lat"
+type = "gps"
+component = "latitude"
+unit = "deg"
+range = [-90.0, 90.0]
+nominal = [25.0, 50.0] # CONUS — tighten to your launch site
+
+[[data]]
+id = "gps_lon"
+type = "gps"
+component = "longitude"
+unit = "deg"
+range = [-180.0, 180.0]
+nominal = [-125.0, -65.0] # CONUS — tighten to your launch site
+
+[[data]]
+id = "gps_alt"
+type = "gps"
+component = "altitude"
+unit = "m"
+range = [-500.0, 100_000.0]
+nominal = [0.0, 30_000.0]
+
+[[data]]
+id = "gps_time"
+type = "gps"
+component = "time"
+unit = "unix_s"
+range = [0.0, 9_999_999_999.0]
+nominal = [0.0, 9_999_999_999.0]   # validated by staleness check, not bounds
+
+# ── SERVOS ─────────────────────────────────────────────────────────────
+[[actuator]]
+id = "fin_servo_pos_x"
+type = "servo"
+axis = "x"
+direction = "positive"
+pin = 1
+unit = "deg"
+range = [-30.0, 30.0]
+default_position = 0.0
+slew_rate_max = 120.0
+armed_by = ["lockout.main_lock", "lockout.servo_arm"]
+disarmed_by = ["lockout.abort", "event.landed"]
+
+[[actuator]]
+id = "fin_servo_neg_x"
+type = "servo"
+axis = "x"
+direction = "negative"
+pin = 2
+unit = "deg"
+range = [-30.0, 30.0]
+default_position = 0.0
+slew_rate_max = 120.0
+armed_by = ["lockout.main_lock", "lockout.servo_arm"]
+disarmed_by = ["lockout.abort", "event.landed"]
+
+[[actuator]]
+id = "fin_servo_pos_y"
+type = "servo"
+axis = "y"
+direction = "positive"
+pin = 3
+unit = "deg"
+range = [-30.0, 30.0]
+default_position = 0.0
+slew_rate_max = 120.0
+armed_by = ["lockout.main_lock", "lockout.servo_arm"]
+disarmed_by = ["lockout.abort", "event.landed"]
+
+[[actuator]]
+id = "fin_servo_neg_y"
+type = "servo"
+axis = "y"
+direction = "negative"
+pin = 4
+unit = "deg"
+range = [-30.0, 30.0]
+default_position = 0.0
+slew_rate_max = 120.0
+armed_by = ["lockout.main_lock", "lockout.servo_arm"]
+disarmed_by = ["lockout.abort", "event.landed"]
+
+[[actuator]]
+id = "tvc_servo_x"
+type = "servo"
+subtype = "tvc"
+axis = "x"
+pin = 5
+unit = "deg"
+range = [-8.0, 8.0]
+default_position = 0.0
+slew_rate_max = 60.0
+armed_by = ["lockout.main_lock", "lockout.servo_arm"]
+disarmed_by = ["lockout.abort", "event.landed"]
+
+[[actuator]]
+id = "tvc_servo_y"
+type = "servo"
+subtype = "tvc"
+axis = "y"
+pin = 6
+unit = "deg"
+range = [-8.0, 8.0]
+default_position = 0.0
+slew_rate_max = 60.0
+armed_by = ["lockout.main_lock", "lockout.servo_arm"]
+disarmed_by = ["lockout.abort", "event.landed"]
+
+# ── PYROS ──────────────────────────────────────────────────────────────
+[[actuator]]
+id = "pyro_drogue"
+type = "pyro"
+channel_a = "14"
+channel_b = "21"
+armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.launch_arm"]
+disarmed_by = ["lockout.abort", "event.landed"]
+debug_only = true
+
+[[actuator]]
+id = "pyro_main"
+type = "pyro"
+channel_a = "15"
+channel_b = "22"
+armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.launch_arm"]
+disarmed_by = ["lockout.abort", "event.landed"]
+debug_only = true
+
+[[actuator]]
+id = "pyro_motor"
+type = "pyro"
+channel_a = "20"
+channel_b = "23"
+armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.launch_arm"]
+disarmed_by = ["lockout.abort", "event.landed"]
+debug_only = true
+
