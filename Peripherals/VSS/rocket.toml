@@ -2,6 +2,7 @@
 name = "Rocket"
 description = "Generic Rocket"
 type = "rocket"
+first_phase = "startup"
 
 # ── Lockouts ───────────────────────────────────────────────────────────
 [[lockout]]
@@ -19,92 +20,58 @@ armed_by = [] # all must be true
 disarmed_by = ["lockout.abort"] # all must be false
 
 # ── Status ─────────────────────────────────────────────────────────────
-[[status]]
+[[phase]]
 id = "startup"
 name = "Startup"
 description = "Vehicle is powering on"
-triggers = ["event.startup"]
+transition_to = ["phase.pad"]
+set_by = ["auto"]
 
-[[status]]
+[[phase]]
 id = "pad"
 name = "Pad"
 description = "Vehicle on pad, awaiting terminal"
-triggers = ["event.pad"]
+transition_to = ["phase.terminal"]
+set_by = ["auto", "user"]
 
-[[status]]
+[[phase]]
 id = "terminal"
 name = "Terminal"
 description = "Vehicle in countdown, awaiting launch"
-triggers = ["event.terminal"]
+transition_to = ["phase.ascent", "phase.pad"]
+set_by = ["user"]
 
-[[status]]
+[[phase]]
 id = "ascent"
 name = "Ascent"
 description = "Vehicle has begun burn"
-triggers = ["event.launch"]
+transition_to = ["phase.coast"]
+set_by = ["peripheral"]
 
-[[status]]
+[[phase]]
 id = "coast"
 name = "Coast"
 description = "Vehicle is no longer under thrust"
-triggers = ["event.burnout"]
+transition_to = ["phase.descent"]
+set_by = ["peripheral"]
 
-[[status]]
+[[phase]]
 id = "descent"
 name = "Descent"
 description = "Vehicle has reach apogee and is now descending"
-triggers = ["event.apogee"]
+transition_to = ["phase.landed"]
+set_by = ["peripheral"]
 
-[[status]]
+[[phase]]
 id = "landed"
 name = "Landed"
 description = "Vehicle has touched down"
-triggers = ["event.landed"]
+transition_to = ["phase.shutdown"]
+set_by = ["peripheral"]
 
-# ── Events ─────────────────────────────────────────────────────────────
-[[event]]
-id = "startup"
-description = "Flight computer startup and systems check complete"
-default = true
-conflicts = ["event.pad", "event.terminal", "event.launch", "event.burnout", "event.apogee", "event.landed"]
-
-[[event]]
-id = "pad"
-description = "Vehicle on pad"
-default = false
-conflicts = ["event.launch", "event.burnout", "event.apogee", "event.landed"]
-
-[[event]]
-id = "terminal"
-description = "Terminal countdown initiated"
-default = false
-prerequisites = ["event.pad"]
-conflicts = ["event.launch", "event.burnout", "event.apogee", "event.landed"]
-
-[[event]]
-id = "launch"
-description = "Launch detected, motor ignition confirmed"
-default = false
-prerequisites = ["event.terminal"]
-conflicts = ["event.burnout", "event.apogee", "event.landed"]
-
-[[event]]
-id = "burnout"
-description = "Motor burnout confirmed"
-default = false
-prerequisites = ["event.launch"]
-conflicts = ["event.apogee", "event.landed"]
-
-[[event]]
-id = "apogee"
-description = "Apogee confirmed"
-default = false
-prerequisites = ["event.burnout"]
-conflicts = ["event.landed"]
-
-[[event]]
-id = "landed"
-description = "Touchdown confirmed"
-default = false
-prerequisites = ["event.apogee"]
-
+[[phase]]
+id = "shutdown"
+name = "Shutdown"
+description = "Vehicle is powering down"
+transition_to = []
+set_by = ["auto", "user", "peripheral"]
