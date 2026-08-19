@@ -11,7 +11,9 @@ function RealtimeTelemetryPlugin() {
     });
 
     openmct.telemetry.addProvider({
-      supportsSubscribe: function (domainObject) { return domainObject.type === 'rocket.telemetry'; },
+      supportsSubscribe: function (domainObject) {
+	    return domainObject.type === 'midgard.telemetry';
+	  },
       subscribe: function (domainObject, callback) {
         var key = domainObject.identifier.key;
         listeners[key] = listeners[key] || [];

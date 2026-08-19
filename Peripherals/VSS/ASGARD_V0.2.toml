@@ -8,6 +8,8 @@ parent = "rocket"
 # ── Interfaces ─────────────────────────────────────────────────────────
 [[interface]]
 id = "elrs"
+name = "ELRS"
+description = "ELRS Radio Interface"
 type = "radio"
 protocol = "elrs"
 freq = 915_000_000
@@ -42,6 +44,8 @@ disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"] # 
 # ── SERVOS ─────────────────────────────────────────────────────────────
 [[actuator]]
 id = "fin_servo_pos_x"
+name = "Fin X+"
+description = "Fin deflection servo in the positive X direction"
 type = "servo"
 subtype = "fin"
 pin = 9
@@ -54,6 +58,8 @@ disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
 
 [[actuator]]
 id = "fin_servo_neg_x"
+name = "Fin X-"
+description = "Fin deflection servo in the negative X direction"
 type = "servo"
 subtype = "fin"
 pin = 6
@@ -66,6 +72,8 @@ disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
 
 [[actuator]]
 id = "fin_servo_pos_y"
+name = "Fin Y+"
+description = "Fin deflection servo in the positive Y direction"
 type = "servo"
 subtype = "fin"
 pin = 5
@@ -78,6 +86,8 @@ disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
 
 [[actuator]]
 id = "fin_servo_neg_y"
+name = "Fin Y-"
+description = "Fin deflection servo in the negative Y direction"
 type = "servo"
 subtype = "fin"
 pin = 4
@@ -90,6 +100,8 @@ disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
 
 [[actuator]]
 id = "tvc_servo_x"
+name = "TVC X"
+description = "Thrust vector control servo in the X direction"
 type = "servo"
 subtype = "tvc"
 pin = 3
@@ -102,6 +114,8 @@ disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
 
 [[actuator]]
 id = "tvc_servo_y"
+name = "TVC Y"
+description = "Thrust vector control servo in the Y direction"
 type = "servo"
 subtype = "tvc"
 pin = 2
@@ -115,30 +129,39 @@ disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
 # ── PYROS ──────────────────────────────────────────────────────────────
 [[actuator]]
 id = "pyro_drogue"
+name = "Drogue Pyro"
+description = "Ejects the drogue chute"
 type = "pyro"
 channel = 1
 channel_a = 14
 channel_b = 21
+unit = "bool"
 armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.launch_arm"]
 disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"]
 debug_only = true
 
 [[actuator]]
 id = "pyro_main"
+name = "Main Pyro"
+description = "Ejects the main chute"
 type = "pyro"
 channel = 2
 channel_a = 15
 channel_b = 22
+unit = "bool"
 armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.launch_arm"]
 disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"]
 debug_only = true
 
 [[actuator]]
 id = "pyro_motor"
+name = "Motor Pyro"
+description = "Ignites the motor"
 type = "pyro"
 channel = 3
 channel_a = 20
 channel_b = 23
+unit = "bool"
 armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.launch_arm"]
 disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"]
 debug_only = true
@@ -146,6 +169,8 @@ debug_only = true
 # ── POSITION ───────────────────────────────────────────────────────────
 [[data_stream]]
 id = "pos_x"
+name = "Position X"
+description = "Position in the X axis"
 type = "position"
 component = "x"
 unit = "m"
@@ -154,6 +179,8 @@ nominal = [-5_000.0, 5_000.0]
 
 [[data_stream]]
 id = "pos_y"
+name = "Position Y"
+description = "Position in the Y axis"
 type = "position"
 component = "y"
 unit = "m"
@@ -162,6 +189,8 @@ nominal = [-5_000.0, 5_000.0]
 
 [[data_stream]]
 id = "pos_z"
+name = "Position Z"
+description = "Position in the Z axis"
 type = "position"
 component = "z"
 unit = "m"
@@ -171,6 +200,8 @@ nominal = [0.0, 30_000.0]
 # ── VELOCITY ───────────────────────────────────────────────────────────
 [[data_stream]]
 id = "vel_x"
+name = "Velocity X"
+description = "Velocity in the X axis"
 type = "velocity"
 component = "x"
 unit = "m/s"
@@ -179,6 +210,8 @@ nominal = [-500.0, 500.0]
 
 [[data_stream]]
 id = "vel_y"
+name = "Velocity Y"
+description = "Velocity in the Y axis"
 type = "velocity"
 component = "y"
 unit = "m/s"
@@ -187,6 +220,8 @@ nominal = [-500.0, 500.0]
 
 [[data_stream]]
 id = "vel_z"
+name = "Velocity Z"
+description = "Velocity in the Z axis"
 type = "velocity"
 component = "z"
 unit = "m/s"
@@ -196,6 +231,8 @@ nominal = [-500.0, 500.0]
 # ── ACCELERATION ───────────────────────────────────────────────────────
 [[data_stream]]
 id = "accel_x"
+name = "Acceleration X"
+description = "Acceleration in the X axis"
 type = "acceleration"
 component = "x"
 unit = "m/s^2"
@@ -204,6 +241,8 @@ nominal = [-20.0, 20.0]
 
 [[data_stream]]
 id = "accel_y"
+name = "Acceleration Y"
+description = "Acceleration in the Y axis"
 type = "acceleration"
 component = "y"
 unit = "m/s^2"
@@ -212,6 +251,8 @@ nominal = [-20.0, 20.0]
 
 [[data_stream]]
 id = "accel_z"
+name = "Acceleration Z"
+description = "Acceleration in the Z axis"
 type = "acceleration"
 component = "z"
 unit = "m/s^2"
@@ -221,6 +262,8 @@ nominal = [-20.0, 20.0]
 # ── ATTITUDE ───────────────────────────────────────────────────────────
 [[data_stream]]
 id = "pitch"
+name = "Pitch"
+description = "Rotation along the X axis"
 type = "attitude"
 component = "pitch"
 unit = "deg"
@@ -229,6 +272,8 @@ nominal = [-30.0, 30.0]
 
 [[data_stream]]
 id = "roll"
+name = "Roll"
+description = "Rotation along the Z axis"
 type = "attitude"
 component = "roll"
 unit = "deg"
@@ -237,6 +282,8 @@ nominal = [-30.0, 30.0]
 
 [[data_stream]]
 id = "yaw"
+name = "Yaw"
+description = "Rotation along the Y axis"
 type = "attitude"
 component = "yaw"
 unit = "deg"
@@ -246,7 +293,9 @@ nominal = [-180.0, 180.0]
 # ── HEADING ────────────────────────────────────────────────────────────
 [[data_stream]]
 id = "heading"
-type = "heading"
+name = "Heading"
+description = "Magnetic Heading (Compass)"
+type = "compass"
 unit = "deg"
 range = [0.0, 360.0]
 nominal = [0.0, 360.0]
@@ -254,6 +303,8 @@ nominal = [0.0, 360.0]
 # ── PRESSURE ───────────────────────────────────────────────────────────
 [[data_stream]]
 id = "static_pressure"
+name = "Static Pressure"
+description = "Static pressure of the surrounding air"
 type = "pressure"
 unit = "Pa"
 range = [10_000.0, 110_000.0]
@@ -262,6 +313,8 @@ nominal = [80_000.0, 102_000.0]
 # ── GPS ────────────────────────────────────────────────────────────────
 [[data_stream]]
 id = "gps_lat"
+name = "GPS Latitude"
+description = "GPS Latitude Coordinate"
 type = "gps"
 component = "latitude"
 unit = "deg"
@@ -270,6 +323,8 @@ nominal = [25.0, 50.0] # CONUS — tighten to your launch site
 
 [[data_stream]]
 id = "gps_lon"
+name = "GPS Longitude"
+description = "GPS Longitude Coordinate"
 type = "gps"
 component = "longitude"
 unit = "deg"
@@ -278,6 +333,8 @@ nominal = [-125.0, -65.0] # CONUS — tighten to your launch site
 
 [[data_stream]]
 id = "gps_alt"
+name = "GPS Altitude"
+description = "GPS Altitude Coordinate"
 type = "gps"
 component = "altitude"
 unit = "m"
@@ -286,6 +343,8 @@ nominal = [0.0, 30_000.0]
 
 [[data_stream]]
 id = "gps_time"
+name = "GPS Time"
+description = "GPS Time Coordinate"
 type = "gps"
 component = "time"
 unit = "unix_s"

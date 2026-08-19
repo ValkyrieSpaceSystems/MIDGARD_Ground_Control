@@ -18,6 +18,7 @@ Usage:
 import os
 import tomllib
 from typing import Any
+from utility import get_nested
 
 
 PERIPHERALS_ROOT = os.path.join(os.path.dirname(__file__), "Peripherals")
@@ -84,17 +85,20 @@ def _resolve_inheritance(manufacturer: str, id_name: str, _seen: set | None = No
     return merged
 
 
-# ── Component classes ──────────────────────────────────────────────────────────
+# ── element classes ──────────────────────────────────────────────────────────
 
 
 class Interface:
     def __init__(self, entry: dict):
         self.id: str              = entry["id"]
+        self.name: str            = entry.get("name", self.id)
+        self.description: str     = entry.get("description", "")
         self.type: str            = entry["type"]
         self.protocol: str | None = entry.get("protocol")
         self.baud: int | None     = entry.get("baud")
         # radio fields
         self.freq: int | None     = entry.get("freq")
+        self.unit: str | None     = "None"
 
     def __repr__(self):
         return f"Interface({self.id!r}, type={self.type!r})"
@@ -107,6 +111,7 @@ class Phase:
         self.description: str          = entry.get("description", "")
         self.transition_to: list[str]  = entry.get("transition_to", [])
         self.set_by: list[str]         = entry.get("set_by", [])
+        self.unit: str                 = 'str'
 
     def __repr__(self):
         return f"Phase({self.id!r}, description={self.description!r})"
@@ -121,6 +126,7 @@ class Lockout:
         self.armed_by: list[str]      = entry.get("armed_by", [])
         self.disarmed_by: list[str]   = entry.get("disarmed_by", [])
         self.debug_only: bool         = entry.get("debug_only", False)
+        self.unit: str                = 'bool'
         # runtime state
         self.state: bool              = self.default
 
@@ -131,6 +137,8 @@ class Lockout:
 class Actuator:
     def __init__(self, entry: dict):
         self.id: str                = entry["id"]
+        self.name: str              = entry.get("name", self.id)
+        self.description: str       = entry.get("description", "")
         self.type: str              = entry["type"]
         self.subtype: str | None    = entry.get("subtype")
         self.armed_by: list[str]    = entry.get("armed_by", [])
@@ -161,7 +169,10 @@ class Actuator:
 class DataStream:
     def __init__(self, entry: dict):
         self.id: str                      = entry["id"]
+        self.name: str                    = entry.get("name", self.id)
+        self.description: str             = entry.get("description", "")
         self.type: str                    = entry["type"]
+        self.subtype: str | None          = entry.get("subtype")
         self.unit: str                    = entry["unit"]
         self.range: tuple                 = tuple(entry["range"])
         self.nominal: tuple               = tuple(entry["nominal"])
@@ -189,7 +200,7 @@ class DataStream:
 # ── Peripheral class ───────────────────────────────────────────────────────────
 
 class Peripheral:
-    def __init__(self, name: str, args: dict):
+    def __init__(self, stop_event, name: str, args: dict):
         self.name:         str = name
         self.interface_id: str = args["interface"]
         self.manufacturer: str = args["manufacturer"]
@@ -205,7 +216,7 @@ class Peripheral:
         self.notes: str        = meta.get("notes", "")
         self.phase: str        = meta.get("first_phase", "")
 
-        # ── Component dicts ────────────────────────────────────────────
+        # ── element dicts ────────────────────────────────────────────
         self.interfaces:   dict[str, Interface]  = {e["id"]: Interface(e)  for e in raw.get("interface",   [])}
         self.lockouts:     dict[str, Lockout]    = {e["id"]: Lockout(e)    for e in raw.get("lockout",     [])}
         self.phases:       dict[str, Phase]      = {e["id"]: Phase(e)      for e in raw.get("phase",       [])}
@@ -239,8 +250,8 @@ class Peripheral:
             print(f"[MIDGARD WARNING] Unknown data stream '{stream_id}'")
             return
         ds.value = value
-        if not ds.in_range():
-            print(f"[MIDGARD ALERT] {stream_id} = {value} {ds.unit} out of range {ds.range}")
+        #if not ds.in_range():
+            #print(f"[MIDGARD ALERT] {stream_id} = {value} {ds.unit} out of range {ds.range}")
 
     def receive_event(self, event_id: str):
         """

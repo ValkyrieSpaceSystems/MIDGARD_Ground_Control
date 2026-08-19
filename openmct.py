@@ -1,11 +1,135 @@
-import os, threading, asyncio, json, sqlite3, time, uvicorn, signal
+import os, threading, asyncio, json, sqlite3, time, uvicorn, signal, re
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from utility import get_nested
+
+
+def _safe_key(*parts):
+    """Join parts into a stable, collision-safe identifier key."""
+    return ".".join(re.sub(r"[^a-zA-Z0-9_-]", "_", str(p)) for p in parts)
+
+def buildOpenMCTjs(peripherals, output_path=None):
+    output_path = output_path or os.path.join(
+        os.path.dirname(__file__), "openmct_midgard", "telemetry-tree.js"
+    )
+
+    type_lookup = {
+        'radio': 'Radio', 'servo': 'Servo', 'fin': 'Fin', 'tvc': 'TVC', 'pyro': 'Pyro',
+        'position': 'Position', 'velocity': 'Velocity', 'acceleration': 'Acceleration',
+        'attitude': 'Attitude', 'heading': 'Heading', 'pressure': 'Pressure', 'gps': 'GPS',
+    }
+
+    def label(raw):
+        return type_lookup.get(raw, raw.replace('_', ' ').title())
+
+    data_tree = {}
+    all_keys = []
+    peripheral_folders = []
+
+    for peripheral_name, peripheral in peripherals.items():
+        data_tree[peripheral_name] = {}
+        element_folders = []
+
+        element_lookup = {
+            'Interfaces': peripheral.interfaces,
+            'Phases': peripheral.phases,
+            'Lockouts': peripheral.lockouts,
+            'Actuators': peripheral.actuators,
+            'Data_Streams': peripheral.data_streams,
+        }
+
+        for element_type, element_dict in element_lookup.items():
+            if not element_dict:
+                continue
+            if element_type != 'Data_Streams':
+                pass
+
+            data_tree[peripheral_name][element_type] = {}
+
+            # group leaves by (type, subtype) — either or both may be None
+            groups = {}
+            for element_id, element in element_dict.items():
+                data_tree[peripheral_name][element_type][element_id] = element
+
+                comp_type = getattr(element, 'type', None)
+                comp_subtype = getattr(element, 'subtype', None)
+
+                key = _safe_key(peripheral_name, element_type, element_id)
+                all_keys.append(key)
+                
+                unit = element.unit
+                
+                if unit == 'bool': meas_format = {"units": unit, 'format': 'enum', 'enumerations': [{'value': 0, 'string': 'FALSE'}, {'value': 1, 'string': 'TRUE'}]}
+                elif unit == 'str': meas_format = {"units": unit, 'format': 'string'}
+                else: meas_format = {"units": unit, 'format': 'number'}
+
+                leaf = {"name": element.name, "key": key, "measurement": meas_format}
+                groups.setdefault((comp_type, comp_subtype), []).append(leaf)
+
+            # fold groups into a folder tree: [type folder ->] [subtype folder ->] leaves
+            type_buckets = {}   # type_or_None -> {"leaves": [...], "subtypes": {subtype: [...]}}
+            for (comp_type, comp_subtype), leaves in groups.items():
+                bucket = type_buckets.setdefault(comp_type, {"leaves": [], "subtypes": {}})
+                if comp_subtype:
+                    bucket["subtypes"].setdefault(comp_subtype, []).extend(leaves)
+                else:
+                    bucket["leaves"].extend(leaves)
+
+            element_children = []
+            for comp_type, bucket in type_buckets.items():
+                if comp_type is None:
+                    # no type at all — sits directly in the element-type folder
+                    element_children.extend(bucket["leaves"])
+                    for subtype_name, sub_leaves in bucket["subtypes"].items():
+                        element_children.append({
+                            "name": label(subtype_name),
+                            "key": _safe_key(peripheral_name, element_type, "untyped", subtype_name),
+                            "children": sub_leaves,
+                        })
+                    continue
+
+                type_folder_children = list(bucket["leaves"])
+                for subtype_name, sub_leaves in bucket["subtypes"].items():
+                    type_folder_children.append({
+                        "name": label(subtype_name),
+                        "key": _safe_key(peripheral_name, element_type, comp_type, subtype_name),
+                        "children": sub_leaves,
+                    })
+
+                element_children.append({
+                    "name": label(comp_type),
+                    "key": _safe_key(peripheral_name, element_type, comp_type),
+                    "children": type_folder_children,
+                })
+
+            if element_children:
+                element_folders.append({
+                    "name": element_type,
+                    "key": _safe_key(peripheral_name, element_type),
+                    "children": element_children,
+                })
+
+        peripheral_folders.append({
+            "name": peripheral.display_name,
+            "key": _safe_key(peripheral_name),
+            "children": element_folders,
+        })
+
+    tree = {"name": "MIDGARD", "key": "midgard_root", "children": peripheral_folders}
+    js = "// Auto-generated by buildOpenMCTjs() — do not edit by hand.\n"
+    js += "var TELEMETRY_TREE = " + json.dumps(tree, indent=4) + ";\n"
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w") as f:
+        f.write(js)
+
+    #print(data_tree, all_keys)
+    return data_tree, all_keys
 
 
 class OpenMCTServer:
-    def __init__(self, port=4000, show_logs=False,
+    def __init__(self, stop_event, port=4000, show_logs=False,
         openmct_dir=os.path.join(os.path.dirname(__file__), "openmct"),
         static_dir=os.path.join(os.path.dirname(__file__), "openmct_midgard"),
     ):
@@ -81,7 +205,7 @@ class OpenMCTServer:
 
     
 class TelemetryServer:
-    def __init__(self, port=4001, db_path=None, show_logs=False):
+    def __init__(self, stop_event, port=4001, db_path=None, show_logs=False):
         self.port = port
         self.db_path = db_path or os.path.join(os.path.dirname(__file__), "telemetry.db")
         self.show_logs = show_logs
@@ -176,8 +300,9 @@ class TelemetryServer:
 
     # ---------------- publish data ----------------
 
-    def send(self, key: str, value):
-        """Thread-safe. Call this whenever a new telemetry value arrives."""
+    def send(self, key: str, value, data_tree):
+        element = get_nested(data_tree, key.split('.'))
+        element.value = value
         if not self.is_running:
             print('[TelemetryServer] Cannot send data because server is not running')
             return
