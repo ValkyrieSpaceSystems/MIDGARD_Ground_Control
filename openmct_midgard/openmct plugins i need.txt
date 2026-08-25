@@ -1,0 +1,12 @@
+button
+
+fuel bar
+latency
+progress bar
+
+map
+
+	sine wave generator
+	state generator
+	
+	summary widget

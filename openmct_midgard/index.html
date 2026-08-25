@@ -33,7 +33,7 @@
 	<script src="dictionary.js"></script>  
 	<script src="realtime-telemetry.js"></script>  
 	<script src="historical-telemetry.js"></script>
-	<script src="control-plugin.js"></script>
+	<script src="switch-plugin.js"></script>
 	<script src="summary-widget-patch.js"></script>
     <link
       rel="icon"
@@ -130,6 +130,7 @@
       openmct.install(DictionaryPlugin());
       openmct.install(RealtimeTelemetryPlugin());
       openmct.install(HistoricalTelemetryPlugin());
+      openmct.install(SwitchViewPlugin());
       
       openmct.install(
         openmct.plugins.AutoflowView({
@@ -138,7 +139,7 @@
       );
       openmct.install(
         openmct.plugins.DisplayLayout({
-          showAsView: ['summary-widget', 'example.imagery']
+          showAsView: ['summary-widget', 'example.imagery', 'midgard.telemetry']
         })
       );
       openmct.install(

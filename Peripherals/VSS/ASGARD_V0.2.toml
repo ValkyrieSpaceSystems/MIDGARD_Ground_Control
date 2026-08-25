@@ -16,27 +16,30 @@ freq = 915_000_000
 baud = 57600
 
 # ── Lockouts ───────────────────────────────────────────────────────────
-[[lockout]]
+[[actuator]]
 id = "pyro_arm"
 name = "Pyro Arm"
 description = "Arms Pyro Channels"
+type = "lockout"
 default = false
 armed_by = ["lockout.main_lock"] # all must be true
 disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"] # all must be false
 debug_only = true
 
-[[lockout]]
+[[actuator]]
 id = "servo_arm"
 name = "Servo Arm"
 description = "Arms Servos"
+type = "lockout"
 default = false
 armed_by = ["lockout.main_lock"] # all must be true
 disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"] # all must be false
 
-[[lockout]]
+[[actuator]]
 id = "launch_arm"
 name = "Launch Arm"
 description = "Arms For Launch"
+type = "lockout"
 default = false
 armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.servo_arm"] # all must be true
 disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"] # all must be false
@@ -52,6 +55,7 @@ pin = 9
 unit = "deg"
 range = [-30.0, 30.0]
 default_position = 0.0
+nominal_position = 0.0
 slew_rate_max = 120.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
 disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
@@ -66,6 +70,7 @@ pin = 6
 unit = "deg"
 range = [-30.0, 30.0]
 default_position = 0.0
+nominal_position = 0.0
 slew_rate_max = 120.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
 disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
@@ -80,6 +85,7 @@ pin = 5
 unit = "deg"
 range = [-30.0, 30.0]
 default_position = 0.0
+nominal_position = 0.0
 slew_rate_max = 120.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
 disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
@@ -94,6 +100,7 @@ pin = 4
 unit = "deg"
 range = [-30.0, 30.0]
 default_position = 0.0
+nominal_position = 0.0
 slew_rate_max = 120.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
 disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
@@ -108,6 +115,7 @@ pin = 3
 unit = "deg"
 range = [-8.0, 8.0]
 default_position = 0.0
+nominal_position = 0.0
 slew_rate_max = 60.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
 disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
@@ -122,6 +130,7 @@ pin = 2
 unit = "deg"
 range = [-8.0, 8.0]
 default_position = 0.0
+nominal_position = 0.0
 slew_rate_max = 60.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
 disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]

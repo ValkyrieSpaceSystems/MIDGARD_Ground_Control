@@ -18,7 +18,7 @@ Usage:
 import os
 import tomllib
 from typing import Any
-from utility import get_nested
+from utility import get_element
 
 
 PERIPHERALS_ROOT = os.path.join(os.path.dirname(__file__), "Peripherals")
@@ -90,6 +90,7 @@ def _resolve_inheritance(manufacturer: str, id_name: str, _seen: set | None = No
 
 class Interface:
     def __init__(self, entry: dict):
+        self.element_type: str    = "Interface"
         self.id: str              = entry["id"]
         self.name: str            = entry.get("name", self.id)
         self.description: str     = entry.get("description", "")
@@ -106,6 +107,7 @@ class Interface:
 
 class Phase:
     def __init__(self, entry: dict):
+        self.element_type: str         = "Phase"
         self.id: str                   = entry["id"]
         self.name: str                 = entry.get("name", self.id)
         self.description: str          = entry.get("description", "")
@@ -117,25 +119,10 @@ class Phase:
         return f"Phase({self.id!r}, description={self.description!r})"
 
 
-class Lockout:
-    def __init__(self, entry: dict):
-        self.id: str                  = entry["id"]
-        self.name: str                = entry.get("name", self.id)
-        self.description: str         = entry.get("description", "")
-        self.default: bool            = entry.get("default", False)
-        self.armed_by: list[str]      = entry.get("armed_by", [])
-        self.disarmed_by: list[str]   = entry.get("disarmed_by", [])
-        self.debug_only: bool         = entry.get("debug_only", False)
-        self.unit: str                = 'bool'
-        # runtime state
-        self.state: bool              = self.default
-
-    def __repr__(self):
-        return f"Lockout({self.id!r}, state={self.state})"
-
-
 class Actuator:
-    def __init__(self, entry: dict):
+    def __init__(self, entry: dict, parent):
+        self.element_type: str      = "Actuator"
+        self.parent                 = parent
         self.id: str                = entry["id"]
         self.name: str              = entry.get("name", self.id)
         self.description: str       = entry.get("description", "")
@@ -143,31 +130,76 @@ class Actuator:
         self.subtype: str | None    = entry.get("subtype")
         self.armed_by: list[str]    = entry.get("armed_by", [])
         self.disarmed_by: list[str] = entry.get("disarmed_by", [])
+        self.arms                   = []
+        self.disarms                = []
         self.debug_only: bool       = entry.get("debug_only", False)
-        # servo fields
-        self.pin: int | None                = entry.get("pin")
-        self.unit: str | None               = entry.get("unit")
-        self.range: tuple | None            = tuple(entry["range"]) if "range" in entry else None
-        self.default_position: float | None = entry.get("default_position")
-        self.slew_rate_max: float | None    = entry.get("slew_rate_max")
-        self.scale: float | None            = entry.get("scale")
-        self.offset: float | None           = entry.get("offset")
-        # pyro fields
-        self.channel: int | None    = entry.get("channel")
-        self.channel_a: int | None  = entry.get("channel_a")
-        self.channel_b: int | None  = entry.get("channel_b")
-        # runtime state
-        self.armed: bool            = False
-        self.position: float | None = self.default_position    # servos
-        self.fired_a: bool          = False                    # pyros
-        self.fired_b: bool          = False                    # pyros
+        self.switch_display: dict   = entry.get("switch_display", {})
+        
+        if self.type == 'lockout': 
+            self.unit: str     = 'bool'
+            self.default: bool = entry.get("default", False)
+            self.nominal: bool = entry.get("nominal", self.default)
+            self.nominal_state = 'Disarmed'
+            self.off_nominal_state = 'Armed'
+            
+        elif self.type == 'valve': 
+            self.unit: str     = 'bool'
+            self.default: bool = entry.get("default", False)
+            self.nominal: bool = entry.get("nominal", self.default)
+            if self.default == False:
+                self.nominal_state = 'Closed'
+                self.off_nominal_state = 'Open'
+            elif self.default == True:
+                self.nominal_state = 'Open'
+                self.off_nominal_state = 'Closed'
+            
+        elif self.type == 'servo': 
+            self.pin: int | None             = entry.get("pin")
+            self.unit: str | None            = entry.get("unit")
+            self.range: tuple | None         = tuple(entry["range"]) if "range" in entry else None
+            self.default: float | None       = entry.get("default_position")
+            self.nominal: float | None       = entry.get("nominal_position") or self.default
+            self.slew_rate_max: float | None = entry.get("slew_rate_max")
+            self.scale: float | None         = entry.get("scale")
+            self.offset: float | None        = entry.get("offset")
+            
+        elif self.type == 'pyro': 
+            self.unit: str             = 'bool'
+            self.channel: int | None   = entry.get("channel")
+            self.channel_a: int | None = entry.get("channel_a")
+            self.channel_b: int | None = entry.get("channel_b")
+            self.default: bool   = False
+            self.nominal: bool         = False
+            self.nominal_state = 'Unfired'
+            self.off_nominal_state = 'Fired'
+        
+        self.value = self.default
+        self.key = None
+        
+        
+        fix_arm = []
+        fix_disarm = []
+        for element in self.armed_by:
+            if element.split('.')[0] != 'phase':
+                fix_arm.append(element)
+        for element in self.disarmed_by:
+            if element.split('.')[0] != 'phase':
+                fix_disarm.append(element)
+        self.armed_by = fix_arm
+        self.disarmed_by = fix_disarm
+                
 
     def __repr__(self):
-        return f"Actuator({self.id!r}, type={self.type!r}, armed={self.armed})"
+        if self.unit == "bool" or self.unit == "int" or self.unit == "str":
+            return f"Actuator({self.id!r}, type={self.type!r}, value={self.value})"
+        else:
+            return f"Actuator({self.id!r}, type={self.type!r}, value={self.value} {self.unit})"
 
 
 class DataStream:
-    def __init__(self, entry: dict):
+    def __init__(self, entry: dict, parent):
+        self.element_type: str            = "Data_Stream"
+        self.parent                       = parent
         self.id: str                      = entry["id"]
         self.name: str                    = entry.get("name", self.id)
         self.description: str             = entry.get("description", "")
@@ -182,6 +214,7 @@ class DataStream:
         self.offset: float | None         = entry.get("offset")
         # runtime state
         self.value: float | None          = None
+        self.key                          = None
 
     def in_range(self) -> bool:
         if self.value is None:
@@ -194,7 +227,10 @@ class DataStream:
         return self.nominal[0] <= self.value <= self.nominal[1]
 
     def __repr__(self):
-        return f"DataStream({self.id!r}, value={self.value} {self.unit})"
+        if self.unit == "bool" or self.unit == "int" or self.unit == "str":
+            return f"Actuator({self.id!r}, type={self.type!r}, value={self.value})"
+        else:
+            return f"Actuator({self.id!r}, type={self.type!r}, value={self.value} {self.unit})"
 
 
 # ── Peripheral class ───────────────────────────────────────────────────────────
@@ -210,18 +246,33 @@ class Peripheral:
         meta = raw.get("meta", {})
 
         # ── Meta ───────────────────────────────────────────────────────
-        self.display_name: str = meta.get("name", self.id)
-        self.description: str  = meta.get("description", "")
-        self.type: str         = meta.get("type", "unknown")
-        self.notes: str        = meta.get("notes", "")
-        self.phase: str        = meta.get("first_phase", "")
+        self.display_name: str    = meta.get("name", self.id)
+        self.description: str     = meta.get("description", "")
+        self.type: str            = meta.get("type", "unknown")
+        self.notes: str           = meta.get("notes", "")
+        self.phase: str           = meta.get("first_phase", "")
+        self.switch_display: dict = meta.get("switch_display", {})
 
-        # ── element dicts ────────────────────────────────────────────
-        self.interfaces:   dict[str, Interface]  = {e["id"]: Interface(e)  for e in raw.get("interface",   [])}
-        self.lockouts:     dict[str, Lockout]    = {e["id"]: Lockout(e)    for e in raw.get("lockout",     [])}
-        self.phases:       dict[str, Phase]      = {e["id"]: Phase(e)      for e in raw.get("phase",       [])}
-        self.actuators:    dict[str, Actuator]   = {e["id"]: Actuator(e)   for e in raw.get("actuator",    [])}
-        self.data_streams: dict[str, DataStream] = {e["id"]: DataStream(e) for e in raw.get("data_stream", [])}
+        # ── Element Dicts ────────────────────────────────────────────
+        self.interfaces: dict[str, Interface] = {e["id"]: Interface(e) for e in raw.get("interface", [])}
+        self.phases: dict[str, Phase] = {e["id"]: Phase(e) for e in raw.get("phase", [])}
+        self.actuators: dict[str, Actuator] = {e["id"]: Actuator(e, self) for e in raw.get("actuator", [])}
+        self.data_streams: dict[str, DataStream] = {e["id"]: DataStream(e, self) for e in raw.get("data_stream", [])}
+
+        # ── Update Armed and Disarmed With Element Objects ─────────────
+        for id, element in self.actuators.items():
+            for cond_key in element.armed_by:
+                cond_index = element.armed_by.index(cond_key)
+                cond_id = cond_key.split('.')[-1]
+                cond = self.actuators[cond_id]
+                element.armed_by[cond_index] = cond
+                cond.arms.append(element)
+            for cond_key in element.disarmed_by:
+                cond_index = element.disarmed_by.index(cond_key)
+                cond_id = cond_key.split('.')[-1]
+                cond = self.actuators[cond_id]
+                element.disarmed_by[cond_index] = cond
+                cond.disarms.append(element)
 
         # ── Select active interface ────────────────────────────────────
         self.active_interface: Interface | None = self.interfaces.get(self.interface_id)

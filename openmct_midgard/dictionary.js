@@ -32,10 +32,12 @@ function DictionaryPlugin() {
 		location: location,
 		telemetry: {
 		  values: [
-		    valueDef,
-		    { key: 'utc', name: 'Timestamp', format: 'utc', hints: { domain: 1 } }
+			valueDef,
+			{ key: 'source', name: 'Source', format: 'string', hints: {} },
+			{ key: 'utc', name: 'Timestamp', format: 'utc', hints: { domain: 1 } }
 		  ]
-		}
+		},
+		switchDisplay: node.switch_display || null
 	  };
 	}
 

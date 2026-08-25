@@ -2,7 +2,9 @@ import os, threading, asyncio, json, sqlite3, time, uvicorn, signal, re
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from utility import get_nested
+from queue import Queue
+
+from utility import get_element
 
 
 def _safe_key(*parts):
@@ -32,15 +34,16 @@ def buildOpenMCTjs(peripherals, output_path=None):
         element_folders = []
 
         element_lookup = {
-            'Interfaces': peripheral.interfaces,
-            'Phases': peripheral.phases,
-            'Lockouts': peripheral.lockouts,
+            #'Interfaces': peripheral.interfaces,
+            #'Phases': peripheral.phases,
             'Actuators': peripheral.actuators,
             'Data_Streams': peripheral.data_streams,
         }
 
         for element_type, element_dict in element_lookup.items():
             if not element_dict:
+                continue
+            if element_type in ['Interfaces', 'Phases']:
                 continue
             if element_type != 'Data_Streams':
                 pass
@@ -56,15 +59,31 @@ def buildOpenMCTjs(peripherals, output_path=None):
                 comp_subtype = getattr(element, 'subtype', None)
 
                 key = _safe_key(peripheral_name, element_type, element_id)
+                element.key = key
                 all_keys.append(key)
                 
-                unit = element.unit
-                
-                if unit == 'bool': meas_format = {"units": unit, 'format': 'enum', 'enumerations': [{'value': 0, 'string': 'FALSE'}, {'value': 1, 'string': 'TRUE'}]}
-                elif unit == 'str': meas_format = {"units": unit, 'format': 'string'}
-                else: meas_format = {"units": unit, 'format': 'number'}
+                states = getattr(element, 'states', None)
+                if states:
+                    meas_format = {'format': 'enum', 'enumerations': [{'value': i, 'string': str(s)} for i, s in enumerate(states)]}
+                elif element.unit == 'bool':
+                    meas_format = {'format': 'enum', 'enumerations': [{'value': 0, 'string': element.nominal_state}, {'value': 1, 'string': element.off_nominal_state}]}
+                elif element.unit == 'str':
+                    meas_format = {'units': element.unit, 'format': 'string'}
+                else:
+                    meas_format = {'units': element.unit, 'format': 'number'}
+                    
+                selected_color = getattr(element, 'selected_color', None)
+                unselected_color = getattr(element, 'unselected_color', None)
+                if selected_color or unselected_color:
+                    meas_format['style'] = {'selected': selected_color, 'unselected': unselected_color}
 
+                switch_display = {}
+                switch_display.update(getattr(peripheral, 'switch_display', {}) or {})
+                switch_display.update(getattr(element, 'switch_display', {}) or {})
+                
                 leaf = {"name": element.name, "key": key, "measurement": meas_format}
+                if switch_display:
+                    leaf["switch_display"] = switch_display
                 groups.setdefault((comp_type, comp_subtype), []).append(leaf)
 
             # fold groups into a folder tree: [type folder ->] [subtype folder ->] leaves
@@ -161,7 +180,7 @@ class OpenMCTServer:
 
     def start(self):
         if self.is_running:
-            print("OpenMCT server is already running.")
+            print("[OpenMCTServer] is already running.")
             return
 
         config = uvicorn.Config(
@@ -182,18 +201,18 @@ class OpenMCTServer:
         while not getattr(self._server, "started", False):
             time.sleep(0.01)
 
-        print(f"OpenMCT server started on port {self.port}")
+        print(f"[OpenMCTServer] started on port {self.port}")
 
     def stop(self):
         if not self.is_running:
-            print("OpenMCT server is not running.")
+            print("[OpenMCTServer] is not running.")
             return
 
         self._server.should_exit = True
         self._thread.join(timeout=5)
         self._server = None
         self._thread = None
-        print("OpenMCT server stopped.")
+        print("[OpenMCTServer] stopped.")
 
     def restart(self):
         self.stop()
@@ -205,10 +224,18 @@ class OpenMCTServer:
 
     
 class TelemetryServer:
-    def __init__(self, stop_event, port=4001, db_path=None, show_logs=False):
+    def __init__(self, stop_event, port=4001, db_path=None, show_logs=False, buffer_interval=0.2):
+        self.stop_event = stop_event
         self.port = port
         self.db_path = db_path or os.path.join(os.path.dirname(__file__), "telemetry.db")
         self.show_logs = show_logs
+        self.buffer_interval = buffer_interval   # seconds; None = always write immediately
+        self._db_lock = threading.Lock()
+        self._db_conn = None
+        self._write_buffer = []
+        self._buffer_lock = threading.Lock()
+        self._flush_thread = None
+        self._flush_stop = None
 
         self.app = FastAPI()
         if self.show_logs:
@@ -225,7 +252,7 @@ class TelemetryServer:
         self._loop = None       # asyncio loop running inside the server thread
         self._server = None     # uvicorn.Server instance, used to request shutdown
         self._thread = None
-        self._command_handler = None
+        self.command_queue = Queue()
 
         self._init_db()
         self._register_routes()
@@ -233,28 +260,50 @@ class TelemetryServer:
     # ---------------- storage ----------------
 
     def _init_db(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS telemetry (key TEXT NOT NULL, value REAL, utc INTEGER NOT NULL)"
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_key_utc ON telemetry(key, utc)")
-        conn.commit()
-        conn.close()
+        self._db_conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
+        self._db_conn.execute("PRAGMA journal_mode=WAL")
+        self._db_conn.execute("PRAGMA busy_timeout=5000")
+        with self._db_lock:
+            self._db_conn.execute(
+                "CREATE TABLE IF NOT EXISTS telemetry (key TEXT NOT NULL, value REAL, utc INTEGER NOT NULL, source TEXT)"
+            )
+            existing_cols = [row[1] for row in self._db_conn.execute("PRAGMA table_info(telemetry)").fetchall()]
+            if "source" not in existing_cols:
+                self._db_conn.execute("ALTER TABLE telemetry ADD COLUMN source TEXT")
+            self._db_conn.execute("CREATE INDEX IF NOT EXISTS idx_key_utc ON telemetry(key, utc)")
+            self._db_conn.commit()
 
-    def _store(self, key, value, utc):
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("INSERT INTO telemetry (key, value, utc) VALUES (?, ?, ?)", (key, value, utc))
-        conn.commit()
-        conn.close()
+    def _store(self, key, value, utc, source=None):
+        with self._db_lock:
+            self._db_conn.execute(
+                "INSERT INTO telemetry (key, value, utc, source) VALUES (?, ?, ?, ?)", (key, value, utc, source)
+            )
+            self._db_conn.commit()
 
     def _query_history(self, key, start, end):
-        conn = sqlite3.connect(self.db_path)
-        rows = conn.execute(
-            "SELECT value, utc FROM telemetry WHERE key = ? AND utc BETWEEN ? AND ? ORDER BY utc",
-            (key, start, end),
-        ).fetchall()
-        conn.close()
-        return [{"key": key, "value": v, "utc": u} for v, u in rows]
+        with self._db_lock:
+            rows = self._db_conn.execute(
+                "SELECT value, utc, source FROM telemetry WHERE key = ? AND utc BETWEEN ? AND ? ORDER BY utc",
+                (key, start, end),
+            ).fetchall()
+        return [{"key": key, "value": v, "utc": u, "source": s} for v, u, s in rows]
+    
+    def _flush_buffer(self):
+        with self._buffer_lock:
+            if not self._write_buffer:
+                return
+            batch, self._write_buffer = self._write_buffer, []
+        with self._db_lock:
+            self._db_conn.executemany(
+                "INSERT INTO telemetry (key, value, utc, source) VALUES (?, ?, ?, ?)", batch
+            )
+            self._db_conn.commit()
+
+    def _flush_loop(self):
+        while not self._flush_stop.is_set():
+            self._flush_stop.wait(self.buffer_interval)
+            self._flush_buffer()
+        self._flush_buffer()   # final flush so nothing pending is lost on stop
 
     # ---------------- routes ----------------
 
@@ -277,19 +326,11 @@ class TelemetryServer:
                     raw = await websocket.receive_text()
                     try:
                         msg = json.loads(raw)
-                        print(msg)
                     except json.JSONDecodeError:
                         continue
-                    
-                # change to fit data receive
-                # -----------------------------------------------
-                    if "key" in msg and "requested" in msg and self._command_handler:  
-                        final_value = self._command_handler(msg["key"], msg["requested"])
-                        self.publish(msg["key"], final_value)  # reuses your existing broadcast logic
-                        
-                # -----------------------------------------------
-                    
-                    
+
+                    if msg.get("cmd") == "request" and "key" in msg and "requested" in msg:
+                        self.command_queue.put_nowait({"key": msg["key"], "requested": msg["requested"]})
             except WebSocketDisconnect:
                 pass
             finally:
@@ -300,18 +341,26 @@ class TelemetryServer:
 
     # ---------------- publish data ----------------
 
-    def send(self, key: str, value, data_tree):
-        element = get_nested(data_tree, key.split('.'))
+    def send(self, key: str, value, data_tree, source: str, immediate=False, push_to_gui=True):
+        if isinstance(value, bool):
+            value = int(value)
+        element = get_element(data_tree, key.split('.'))
         element.value = value
         if not self.is_running:
             print('[TelemetryServer] Cannot send data because server is not running')
             return
         utc = int(time.time() * 1000)
-        self._store(key, value, utc)
-        asyncio.run_coroutine_threadsafe(self._broadcast(key, value, utc), self._loop)
+        if self.buffer_interval and not immediate:
+            with self._buffer_lock:
+                self._write_buffer.append((key, value, utc, source))
+        else:
+            self._store(key, value, utc, source)
 
-    async def _broadcast(self, key, value, utc):
-        point = json.dumps({"key": key, "value": value, "utc": utc})
+        if push_to_gui: 
+            asyncio.run_coroutine_threadsafe(self._broadcast(key, value, utc, source), self._loop)
+
+    async def _broadcast(self, key, value, utc, source=None):
+        point = json.dumps({"key": key, "value": value, "utc": utc, "source": source})
         for client in list(self._clients):
             try:
                 await client.send_text(point)
@@ -328,7 +377,7 @@ class TelemetryServer:
 
     def start(self):
         if self.is_running:
-            print("Telemetry server is already running.")
+            print("[TelemetryServer] is already running.")
             return
 
         config = uvicorn.Config(
@@ -347,22 +396,31 @@ class TelemetryServer:
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
-
-        while self._loop is None:      # wait for the loop to actually spin up
+        while self._loop is None:
             time.sleep(0.01)
 
-        print(f"Telemetry server started on port {self.port}")
+        if self.buffer_interval:
+            self._flush_stop = threading.Event()
+            self._flush_thread = threading.Thread(target=self._flush_loop, daemon=True)
+            self._flush_thread.start()
+
+        print(f"[TelemetryServer] started on port {self.port}")
 
     def stop(self):
         if not self.is_running:
-            print("Telemetry server is not running.")
+            print("[TelemetryServer] is not running.")
             return
 
+        if self._flush_thread:
+            self._flush_stop.set()
+            self._flush_thread.join(timeout=2)
+            self._flush_thread = None
         self._server.should_exit = True
         self._thread.join(timeout=5)
         self._server = None
         self._loop = None
-        print("Telemetry server stopped.")
+        
+        print("[TelemetryServer] stopped.")
 
     def restart(self):
         self.stop()

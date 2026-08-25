@@ -4,17 +4,28 @@ description = "Generic Rocket"
 type = "rocket"
 first_phase = "startup"
 
+[meta.switch_display]
+namePosition = "top"
+nameAlign = "center"
+valueAlign = "center"
+
 # ── Lockouts ───────────────────────────────────────────────────────────
-[[lockout]]
+[[actuator]]
 id = "abort"
 name = "Abort"
 description = "Emergency shutdown"
+type = "lockout"
 default = false
 
-[[lockout]]
+[actuator.switch_display]
+namePosition = "left"
+nameAlign = "right"
+
+[[actuator]]
 id = "main_lock"
 name = "Main Lockout"
 description = "Disarms all other lockouts and actuators"
+type = "lockout"
 default = false
 armed_by = [] # all must be true
 disarmed_by = ["lockout.abort"] # all must be false
@@ -25,7 +36,7 @@ id = "startup"
 name = "Startup"
 description = "Vehicle is powering on"
 transition_to = ["phase.pad"]
-set_by = ["auto"]
+set_by = ["auto", "peripheral"]
 
 [[phase]]
 id = "pad"
