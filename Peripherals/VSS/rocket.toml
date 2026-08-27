@@ -30,59 +30,91 @@ default = false
 armed_by = [] # all must be true
 disarmed_by = ["lockout.abort"] # all must be false
 
-# ── Status ─────────────────────────────────────────────────────────────
-[[phase]]
+[[actuator]]
+id = "logging"
+name = "Logging"
+description = "Log commands and data to csv file"
+type = "logging"
+
+# ── Phases ─────────────────────────────────────────────────────────────
+[[actuator]]
+id = "flight_phase"
+name = "Flight Phase"
+description = "Phase of flight selector/display"
+type = "selector"
+default = "startup"
+nominal = "pad"
+
+[[state]]
 id = "startup"
 name = "Startup"
 description = "Vehicle is powering on"
+type = "phase"
+parent = "flight_phase"
 transition_to = ["phase.pad"]
-set_by = ["auto", "peripheral"]
+sources = ["auto", "peripheral"]
 
-[[phase]]
+[[state]]
 id = "pad"
 name = "Pad"
 description = "Vehicle on pad, awaiting terminal"
+type = "phase"
+parent = "flight_phase"
 transition_to = ["phase.terminal"]
-set_by = ["auto", "user"]
+sources = ["auto", "user", "peripheral"]
 
-[[phase]]
+[[state]]
 id = "terminal"
 name = "Terminal"
 description = "Vehicle in countdown, awaiting launch"
+type = "phase"
+parent = "flight_phase"
 transition_to = ["phase.ascent", "phase.pad"]
-set_by = ["user"]
+armed_by = ["lockout.main_lock"] # all must be true
+disarmed_by = ["lockout.abort"] # all must be false
+sources = ["user"]
 
-[[phase]]
+[[state]]
 id = "ascent"
 name = "Ascent"
 description = "Vehicle has begun burn"
+type = "phase"
+parent = "flight_phase"
 transition_to = ["phase.coast"]
-set_by = ["peripheral"]
+sources = ["peripheral"]
 
-[[phase]]
+[[state]]
 id = "coast"
 name = "Coast"
 description = "Vehicle is no longer under thrust"
+type = "phase"
+parent = "flight_phase"
 transition_to = ["phase.descent"]
-set_by = ["peripheral"]
+sources = ["peripheral"]
 
-[[phase]]
+[[state]]
 id = "descent"
 name = "Descent"
 description = "Vehicle has reach apogee and is now descending"
+type = "phase"
+parent = "flight_phase"
 transition_to = ["phase.landed"]
-set_by = ["peripheral"]
+sources = ["peripheral"]
 
-[[phase]]
+[[state]]
 id = "landed"
 name = "Landed"
 description = "Vehicle has touched down"
+type = "phase"
+parent = "flight_phase"
 transition_to = ["phase.shutdown"]
-set_by = ["peripheral"]
+sources = ["peripheral"]
 
-[[phase]]
+[[state]]
 id = "shutdown"
 name = "Shutdown"
 description = "Vehicle is powering down"
+type = "phase"
+parent = "flight_phase"
 transition_to = []
-set_by = ["auto", "user", "peripheral"]
+sources = ["auto", "user", "peripheral"]

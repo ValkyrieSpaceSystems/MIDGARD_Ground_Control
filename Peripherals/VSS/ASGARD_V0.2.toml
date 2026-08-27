@@ -44,6 +44,17 @@ default = false
 armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.servo_arm"] # all must be true
 disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"] # all must be false
 
+# ── TRIGGERS ───────────────────────────────────────────────────────────
+[[actuator]]
+id = "blink_led"
+name = "Blink LED"
+description = "Blinks the onboard debug LED"
+type = "trigger"
+trigger = ""
+armed_by = [] # all must be true
+disarmed_by = ["phase.startup"] # all must be false
+sources = ["user"]
+
 # ── SERVOS ─────────────────────────────────────────────────────────────
 [[actuator]]
 id = "fin_servo_pos_x"

@@ -1,10 +1,10 @@
-import os, threading, asyncio, json, sqlite3, time, uvicorn, signal, re
+import os, threading, asyncio, json, sqlite3, time, uvicorn, re, sys, csv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from queue import Queue
 
-from utility import get_element
+from utility import get_element, combine_with_and
 
 
 def _safe_key(*parts):
@@ -35,75 +35,90 @@ def buildOpenMCTjs(peripherals, output_path=None):
 
         element_lookup = {
             #'Interfaces': peripheral.interfaces,
-            #'Phases': peripheral.phases,
+            'States': peripheral.states,
             'Actuators': peripheral.actuators,
             'Data_Streams': peripheral.data_streams,
         }
 
-        for element_type, element_dict in element_lookup.items():
+        for element_class, element_dict in element_lookup.items():
             if not element_dict:
                 continue
-            if element_type in ['Interfaces', 'Phases']:
+            elif element_class in ['Interfaces']:
                 continue
-            if element_type != 'Data_Streams':
-                pass
 
-            data_tree[peripheral_name][element_type] = {}
+            data_tree[peripheral_name][element_class] = {}
 
             # group leaves by (type, subtype) — either or both may be None
             groups = {}
             for element_id, element in element_dict.items():
-                data_tree[peripheral_name][element_type][element_id] = element
+                data_tree[peripheral_name][element_class][element_id] = element
 
-                comp_type = getattr(element, 'type', None)
-                comp_subtype = getattr(element, 'subtype', None)
+                element_type = getattr(element, 'type', None)
+                element_subtype = getattr(element, 'subtype', None)
 
-                key = _safe_key(peripheral_name, element_type, element_id)
+                key = _safe_key(peripheral_name, element_class, element_id)
                 element.key = key
                 all_keys.append(key)
-                
-                states = getattr(element, 'states', None)
-                if states:
-                    meas_format = {'format': 'enum', 'enumerations': [{'value': i, 'string': str(s)} for i, s in enumerate(states)]}
-                elif element.unit == 'bool':
-                    meas_format = {'format': 'enum', 'enumerations': [{'value': 0, 'string': element.nominal_state}, {'value': 1, 'string': element.off_nominal_state}]}
-                elif element.unit == 'str':
-                    meas_format = {'units': element.unit, 'format': 'string'}
-                else:
-                    meas_format = {'units': element.unit, 'format': 'number'}
-                    
-                selected_color = getattr(element, 'selected_color', None)
-                unselected_color = getattr(element, 'unselected_color', None)
-                if selected_color or unselected_color:
-                    meas_format['style'] = {'selected': selected_color, 'unselected': unselected_color}
 
-                switch_display = {}
-                switch_display.update(getattr(peripheral, 'switch_display', {}) or {})
-                switch_display.update(getattr(element, 'switch_display', {}) or {})
-                
-                leaf = {"name": element.name, "key": key, "measurement": meas_format}
-                if switch_display:
-                    leaf["switch_display"] = switch_display
-                groups.setdefault((comp_type, comp_subtype), []).append(leaf)
+                control_type = getattr(element, 'control_type', None)
+
+                leaf = {}
+                if control_type == 'button':
+                    leaf = {"name": element.name, "key": key, "trigger": True}
+
+                elif control_type in ('switch', 'selector'):
+                    if control_type == 'switch':
+                        enumerations = [{'value': 0, 'string': 'False'}, {'value': 1, 'string': 'True'}]
+                    else:
+                        enumerations = [{'value': i, 'string': str(s)} for i, s in enumerate(element.states)]
+
+                    meas_format = {'format': 'enum', 'enumerations': enumerations}
+
+                    selected_color = getattr(element, 'selected_color', None)
+                    unselected_color = getattr(element, 'unselected_color', None)
+                    if selected_color or unselected_color:
+                        meas_format['style'] = {'selected': selected_color, 'unselected': unselected_color}
+
+                    leaf = {"name": element.name, "key": key, "measurement": meas_format}
+
+                    switch_display = {}
+                    switch_display.update(getattr(peripheral, 'switch_display', {}) or {})
+                    switch_display.update(getattr(element, 'switch_display', {}) or {})
+                    if switch_display:
+                        leaf["switch_display"] = switch_display
+
+                elif element_class == 'Data_Streams':
+                    # DataStream, or an Actuator with no control_type (servo)
+                    unit = getattr(element, 'unit', None)
+                    if unit == 'bool':
+                        meas_format = {'format': 'enum', 'enumerations': [{'value': False, 'string': 'False'}, {'value': True, 'string': 'True'}]}
+                    elif unit == 'str':
+                        meas_format = {'units': unit, 'format': 'string'}
+                    else:
+                        meas_format = {'units': unit, 'format': 'number'}
+                    leaf = {"name": element.name, "key": key, "measurement": meas_format}
+                        
+                if leaf:
+                    groups.setdefault((element_type, element_subtype), []).append(leaf)
 
             # fold groups into a folder tree: [type folder ->] [subtype folder ->] leaves
             type_buckets = {}   # type_or_None -> {"leaves": [...], "subtypes": {subtype: [...]}}
-            for (comp_type, comp_subtype), leaves in groups.items():
-                bucket = type_buckets.setdefault(comp_type, {"leaves": [], "subtypes": {}})
-                if comp_subtype:
-                    bucket["subtypes"].setdefault(comp_subtype, []).extend(leaves)
+            for (element_type, element_subtype), leaves in groups.items():
+                bucket = type_buckets.setdefault(element_type, {"leaves": [], "subtypes": {}})
+                if element_subtype:
+                    bucket["subtypes"].setdefault(element_subtype, []).extend(leaves)
                 else:
                     bucket["leaves"].extend(leaves)
 
             element_children = []
-            for comp_type, bucket in type_buckets.items():
-                if comp_type is None:
+            for element_type, bucket in type_buckets.items():
+                if element_type is None:
                     # no type at all — sits directly in the element-type folder
                     element_children.extend(bucket["leaves"])
                     for subtype_name, sub_leaves in bucket["subtypes"].items():
                         element_children.append({
                             "name": label(subtype_name),
-                            "key": _safe_key(peripheral_name, element_type, "untyped", subtype_name),
+                            "key": _safe_key(peripheral_name, element_class, "untyped", subtype_name),
                             "children": sub_leaves,
                         })
                     continue
@@ -112,20 +127,20 @@ def buildOpenMCTjs(peripherals, output_path=None):
                 for subtype_name, sub_leaves in bucket["subtypes"].items():
                     type_folder_children.append({
                         "name": label(subtype_name),
-                        "key": _safe_key(peripheral_name, element_type, comp_type, subtype_name),
+                        "key": _safe_key(peripheral_name, element_class, element_type, subtype_name),
                         "children": sub_leaves,
                     })
 
                 element_children.append({
-                    "name": label(comp_type),
-                    "key": _safe_key(peripheral_name, element_type, comp_type),
+                    "name": label(element_type),
+                    "key": _safe_key(peripheral_name, element_class, element_type),
                     "children": type_folder_children,
                 })
 
             if element_children:
                 element_folders.append({
-                    "name": element_type,
-                    "key": _safe_key(peripheral_name, element_type),
+                    "name": element_class,
+                    "key": _safe_key(peripheral_name, element_class),
                     "children": element_children,
                 })
 
@@ -148,7 +163,7 @@ def buildOpenMCTjs(peripherals, output_path=None):
 
 
 class OpenMCTServer:
-    def __init__(self, stop_event, port=4000, show_logs=False,
+    def __init__(self, port=4000, show_logs=False,
         openmct_dir=os.path.join(os.path.dirname(__file__), "openmct"),
         static_dir=os.path.join(os.path.dirname(__file__), "openmct_midgard"),
     ):
@@ -203,7 +218,7 @@ class OpenMCTServer:
 
         print(f"[OpenMCTServer] started on port {self.port}")
 
-    def stop(self):
+    def stop(self, delete_db=False):
         if not self.is_running:
             print("[OpenMCTServer] is not running.")
             return
@@ -224,18 +239,30 @@ class OpenMCTServer:
 
     
 class TelemetryServer:
-    def __init__(self, stop_event, port=4001, db_path=None, show_logs=False, buffer_interval=0.2):
+    def __init__(self, stop_event, log_data=True, log_actuations=True, log_output_dir=None, port=4001, db_path=None, show_logs=False, buffer_interval=0.2):
         self.stop_event = stop_event
+        self.logging = False
+        self.log_data = log_data
+        self.log_actuations = log_actuations
+        self.log_output_dir = log_output_dir if log_output_dir != '' else None
         self.port = port
         self.db_path = db_path or os.path.join(os.path.dirname(__file__), "telemetry.db")
         self.show_logs = show_logs
         self.buffer_interval = buffer_interval   # seconds; None = always write immediately
         self._db_lock = threading.Lock()
         self._db_conn = None
+        self._csv_lock = threading.Lock()
+        self.csv_path = None
+        self.csv_file = None
+        self.csv_files = []
         self._write_buffer = []
+        self._log_buffer = []
         self._buffer_lock = threading.Lock()
+        self._log_lock = threading.Lock()
         self._flush_thread = None
         self._flush_stop = None
+        self._flush_log_thread = None
+        self._flush_log_stop = None
 
         self.app = FastAPI()
         if self.show_logs:
@@ -255,6 +282,7 @@ class TelemetryServer:
         self.command_queue = Queue()
 
         self._init_db()
+        self._init_log()
         self._register_routes()
 
     # ---------------- storage ----------------
@@ -272,6 +300,9 @@ class TelemetryServer:
                 self._db_conn.execute("ALTER TABLE telemetry ADD COLUMN source TEXT")
             self._db_conn.execute("CREATE INDEX IF NOT EXISTS idx_key_utc ON telemetry(key, utc)")
             self._db_conn.commit()
+            
+    def _init_log(self):
+        pass
 
     def _store(self, key, value, utc, source=None):
         with self._db_lock:
@@ -339,25 +370,114 @@ class TelemetryServer:
                 if self.show_logs:
                     print(f"[TelemetryServer] client disconnected ({len(self._clients)} clients)")
 
+    # ---------------- logging ----------------
+    
+    def _flush_log_buffer(self):
+        with self._log_lock:
+            if not self._log_buffer:
+                return
+            batch, self._log_buffer = self._log_buffer, []
+        with self._csv_lock:
+            self.csv_writer.writerows(batch)
+
+    def _flush_log_loop(self):
+        while not self._flush_log_stop.is_set():
+            self._flush_log_stop.wait(self.buffer_interval)
+            self._flush_log_buffer()
+        self._flush_log_buffer() 
+    
+    def start_logging(self):
+        try:
+            if not self.logging:
+                self.logging = True
+                self.csv_path = os.path.join(self.log_output_dir,f"{time.strftime("%Y-%m-%d_%H-%M-%S")}.csv") if self.log_output_dir is not None else os.path.join(os.path.dirname(__file__), "logs", f"{time.strftime("%Y-%m-%d_%H-%M-%S")}.csv")
+                self.csv_files.append(self.csv_path)
+                
+                header = ["unix_time_ns", "key", "value", "source"]
+                self.csv_file = open(f'{self.csv_path}', 'a', newline='', buffering=1<<16)
+                self.csv_writer = csv.writer(self.csv_file)
+                self.csv_writer.writerow(header)
+        
+                if self.buffer_interval:
+                    self._flush_log_stop = threading.Event()
+                    self._flush_log_thread = threading.Thread(target=self._flush_log_loop, daemon=True)
+                    self._flush_log_thread.start()
+        
+                print(f"[Logging] File Started: {self.csv_path}")
+                
+            else:
+                print('[Logging] already running')
+                
+        except Exception as e:
+            _, _, tb = sys.exc_info()
+            print(f"[Logging] Start Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+    
+    def stop_logging(self):
+        try:
+            if self.logging:
+                self.logging = False
+                
+                if self._flush_thread:
+                    self._flush_log_stop.set()
+                    self._flush_log_thread.join(timeout=2)
+                    self._flush_log_thread = None
+                
+                with self._log_lock:
+                    self.csv_file.close()
+                    self._csv_file = None
+                
+            else:
+                print('[Logging] already stopped')
+                
+        except Exception as e:
+            _, _, tb = sys.exc_info()
+            print(f"[Logging] Stop Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+
     # ---------------- publish data ----------------
 
-    def send(self, key: str, value, data_tree, source: str, immediate=False, push_to_gui=True):
-        if isinstance(value, bool):
-            value = int(value)
-        element = get_element(data_tree, key.split('.'))
-        element.value = value
-        if not self.is_running:
-            print('[TelemetryServer] Cannot send data because server is not running')
-            return
-        utc = int(time.time() * 1000)
-        if self.buffer_interval and not immediate:
-            with self._buffer_lock:
-                self._write_buffer.append((key, value, utc, source))
-        else:
-            self._store(key, value, utc, source)
+    def send(self, utc: int, key: str, value, data_tree, source: str, immediate=False, push_to_gui=True):
+        try:
+            if not self.is_running:
+                print('[TelemetryServer] Cannot send data because server is not running')
+            
+            if isinstance(value, bool):
+                value = int(value)
+                
+            element = get_element(data_tree, key)
+            
+            def _push(utc, key, value, source, push_to_gui):
+                if self.is_running:
+                    if self.buffer_interval and not immediate:
+                        with self._buffer_lock:
+                            self._write_buffer.append((key, value, utc, source))
+                    else:
+                        self._store(key, value, utc, source)
 
-        if push_to_gui: 
-            asyncio.run_coroutine_threadsafe(self._broadcast(key, value, utc, source), self._loop)
+                if push_to_gui: 
+                    asyncio.run_coroutine_threadsafe(self._broadcast(key, value, utc, source), self._loop)
+                    
+                if self.logging:
+                    if self.buffer_interval and not immediate:
+                        with self._buffer_lock:
+                            self._log_buffer.append((utc, key, value, source))
+                    else:
+                        self.csv_writer.writerow((utc, key, value, source))
+                        
+            if element.element_type in ['State', 'Actuator']: # Write preactuation state to show actuation on a graph as a step instead of a long slope
+                _push(utc, key, element.value, source, False)
+                
+            element.value = value
+            _push(utc, key, element.value, source, push_to_gui=push_to_gui)
+            
+            if element.control_type == 'selector':
+                for i in range(len(element.states_index)):
+                    element.states_index[i].value = False
+                element.states_index[value].value = True
+            
+        except Exception as e:
+            _, _, tb = sys.exc_info()
+            print(f"[TelemetryServer] Send Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            
 
     async def _broadcast(self, key, value, utc, source=None):
         point = json.dumps({"key": key, "value": value, "utc": utc, "source": source})
@@ -368,59 +488,72 @@ class TelemetryServer:
                 if client in self._clients:
                     self._clients.remove(client)
 
-    # ---------------- receive commands ----------------
-
-    def receive(self, handler):
-        self._command_handler = handler
-
     # ---------------- lifecycle (mirrors OpenMCTServer) ----------------
 
     def start(self):
-        if self.is_running:
-            print("[TelemetryServer] is already running.")
-            return
+        try:
+            if self.is_running:
+                print("[TelemetryServer] is already running.")
+                return
 
-        config = uvicorn.Config(
-            self.app,
-            host="0.0.0.0",
-            port=self.port,
-            log_config=None,     # stop uvicorn from touching the shared/global logging config
-            access_log=False,    # suppress its built-in per-request access log
-        )
-        self._server = uvicorn.Server(config)
+            config = uvicorn.Config(
+                self.app,
+                host="0.0.0.0",
+                port=self.port,
+                log_config=None,     # stop uvicorn from touching the shared/global logging config
+                access_log=False,    # suppress its built-in per-request access log
+            )
+            self._server = uvicorn.Server(config)
 
-        def _run():
-            self._loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._loop)
-            self._loop.run_until_complete(self._server.serve())
+            def _run():
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+                self._loop.run_until_complete(self._server.serve())
 
-        self._thread = threading.Thread(target=_run, daemon=True)
-        self._thread.start()
-        while self._loop is None:
-            time.sleep(0.01)
+            self._thread = threading.Thread(target=_run, daemon=True)
+            self._thread.start()
+            while self._loop is None:
+                time.sleep(0.01)
 
-        if self.buffer_interval:
-            self._flush_stop = threading.Event()
-            self._flush_thread = threading.Thread(target=self._flush_loop, daemon=True)
-            self._flush_thread.start()
+            if self.buffer_interval:
+                self._flush_stop = threading.Event()
+                self._flush_thread = threading.Thread(target=self._flush_loop, daemon=True)
+                self._flush_thread.start()
 
-        print(f"[TelemetryServer] started on port {self.port}")
+            print(f"[TelemetryServer] started on port {self.port}")
+            
+        except Exception as e:
+            _, _, tb = sys.exc_info()
+            print(f"[TelemetryServer] Start Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
-    def stop(self):
-        if not self.is_running:
-            print("[TelemetryServer] is not running.")
-            return
+    def stop(self, delete_db=False):
+        try:
+            if not self.is_running:
+                print("[TelemetryServer] is not running.")
+                return
 
-        if self._flush_thread:
-            self._flush_stop.set()
-            self._flush_thread.join(timeout=2)
-            self._flush_thread = None
-        self._server.should_exit = True
-        self._thread.join(timeout=5)
-        self._server = None
-        self._loop = None
-        
-        print("[TelemetryServer] stopped.")
+            if self._flush_thread:
+                self._flush_stop.set()
+                self._flush_thread.join(timeout=2)
+                self._flush_thread = None
+            self._server.should_exit = True
+            self._thread.join(timeout=5)
+            self._server = None
+            self._loop = None
+            
+            with self._db_lock:
+                if self._db_conn:
+                    self._db_conn.close()
+                    self._db_conn = None
+
+            if delete_db and os.path.exists(self.db_path):
+                os.remove(self.db_path)
+            
+            print("[TelemetryServer] stopped.")
+            
+        except Exception as e:
+            _, _, tb = sys.exc_info()
+            print(f"[TelemetryServer] Stop Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
     def restart(self):
         self.stop()

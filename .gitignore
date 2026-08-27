@@ -1,2 +1,6 @@
-
+test.py
 telemetry.db
+openmct
+**/__pycache__/**
+logs
+/__pycache__

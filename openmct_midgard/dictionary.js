@@ -20,6 +20,10 @@ function DictionaryPlugin() {
 		return { identifier: identifier, name: node.name, type: 'folder', location: location };
 	  }
 
+	  if (node.trigger) {
+		return { identifier: identifier, name: node.name, type: 'midgard.trigger', location: location };
+	  }
+
 	  var valueDef = Object.assign(
 		{ key: 'value', name: node.name, hints: { range: 1 } },
 		node.measurement || { format: 'number' }
@@ -32,9 +36,9 @@ function DictionaryPlugin() {
 		location: location,
 		telemetry: {
 		  values: [
-			valueDef,
-			{ key: 'source', name: 'Source', format: 'string', hints: {} },
-			{ key: 'utc', name: 'Timestamp', format: 'utc', hints: { domain: 1 } }
+		    valueDef,
+		    { key: 'source', name: 'Source', format: 'string', hints: {} },
+		    { key: 'utc', name: 'Timestamp', format: 'utc', hints: { domain: 1 } }
 		  ]
 		},
 		switchDisplay: node.switch_display || null

@@ -23,11 +23,11 @@ var TELEMETRY_TREE = {
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "Disarmed"
+                                                "string": "False"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "Armed"
+                                                "string": "True"
                                             }
                                         ]
                                     },
@@ -45,11 +45,11 @@ var TELEMETRY_TREE = {
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "Disarmed"
+                                                "string": "False"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "Armed"
+                                                "string": "True"
                                             }
                                         ]
                                     },
@@ -67,11 +67,11 @@ var TELEMETRY_TREE = {
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "Disarmed"
+                                                "string": "False"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "Armed"
+                                                "string": "True"
                                             }
                                         ]
                                     },
@@ -89,11 +89,11 @@ var TELEMETRY_TREE = {
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "Disarmed"
+                                                "string": "False"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "Armed"
+                                                "string": "True"
                                             }
                                         ]
                                     },
@@ -111,11 +111,11 @@ var TELEMETRY_TREE = {
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "Disarmed"
+                                                "string": "False"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "Armed"
+                                                "string": "True"
                                             }
                                         ]
                                     },
@@ -128,98 +128,93 @@ var TELEMETRY_TREE = {
                             ]
                         },
                         {
-                            "name": "Servo",
-                            "key": "Valhala_I.Actuators.servo",
+                            "name": "Logging",
+                            "key": "Valhala_I.Actuators.logging",
                             "children": [
                                 {
-                                    "name": "Fin",
-                                    "key": "Valhala_I.Actuators.servo.fin",
-                                    "children": [
-                                        {
-                                            "name": "Fin X+",
-                                            "key": "Valhala_I.Actuators.fin_servo_pos_x",
-                                            "measurement": {
-                                                "units": "deg",
-                                                "format": "number"
+                                    "name": "Logging",
+                                    "key": "Valhala_I.Actuators.logging",
+                                    "measurement": {
+                                        "format": "enum",
+                                        "enumerations": [
+                                            {
+                                                "value": 0,
+                                                "string": "False"
                                             },
-                                            "switch_display": {
-                                                "namePosition": "top",
-                                                "nameAlign": "center",
-                                                "valueAlign": "center"
+                                            {
+                                                "value": 1,
+                                                "string": "True"
                                             }
-                                        },
-                                        {
-                                            "name": "Fin X-",
-                                            "key": "Valhala_I.Actuators.fin_servo_neg_x",
-                                            "measurement": {
-                                                "units": "deg",
-                                                "format": "number"
-                                            },
-                                            "switch_display": {
-                                                "namePosition": "top",
-                                                "nameAlign": "center",
-                                                "valueAlign": "center"
-                                            }
-                                        },
-                                        {
-                                            "name": "Fin Y+",
-                                            "key": "Valhala_I.Actuators.fin_servo_pos_y",
-                                            "measurement": {
-                                                "units": "deg",
-                                                "format": "number"
-                                            },
-                                            "switch_display": {
-                                                "namePosition": "top",
-                                                "nameAlign": "center",
-                                                "valueAlign": "center"
-                                            }
-                                        },
-                                        {
-                                            "name": "Fin Y-",
-                                            "key": "Valhala_I.Actuators.fin_servo_neg_y",
-                                            "measurement": {
-                                                "units": "deg",
-                                                "format": "number"
-                                            },
-                                            "switch_display": {
-                                                "namePosition": "top",
-                                                "nameAlign": "center",
-                                                "valueAlign": "center"
-                                            }
-                                        }
-                                    ]
-                                },
+                                        ]
+                                    },
+                                    "switch_display": {
+                                        "namePosition": "top",
+                                        "nameAlign": "center",
+                                        "valueAlign": "center"
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Selector",
+                            "key": "Valhala_I.Actuators.selector",
+                            "children": [
                                 {
-                                    "name": "TVC",
-                                    "key": "Valhala_I.Actuators.servo.tvc",
-                                    "children": [
-                                        {
-                                            "name": "TVC X",
-                                            "key": "Valhala_I.Actuators.tvc_servo_x",
-                                            "measurement": {
-                                                "units": "deg",
-                                                "format": "number"
+                                    "name": "Flight Phase",
+                                    "key": "Valhala_I.Actuators.flight_phase",
+                                    "measurement": {
+                                        "format": "enum",
+                                        "enumerations": [
+                                            {
+                                                "value": 0,
+                                                "string": "startup"
                                             },
-                                            "switch_display": {
-                                                "namePosition": "top",
-                                                "nameAlign": "center",
-                                                "valueAlign": "center"
-                                            }
-                                        },
-                                        {
-                                            "name": "TVC Y",
-                                            "key": "Valhala_I.Actuators.tvc_servo_y",
-                                            "measurement": {
-                                                "units": "deg",
-                                                "format": "number"
+                                            {
+                                                "value": 1,
+                                                "string": "pad"
                                             },
-                                            "switch_display": {
-                                                "namePosition": "top",
-                                                "nameAlign": "center",
-                                                "valueAlign": "center"
+                                            {
+                                                "value": 2,
+                                                "string": "terminal"
+                                            },
+                                            {
+                                                "value": 3,
+                                                "string": "ascent"
+                                            },
+                                            {
+                                                "value": 4,
+                                                "string": "coast"
+                                            },
+                                            {
+                                                "value": 5,
+                                                "string": "descent"
+                                            },
+                                            {
+                                                "value": 6,
+                                                "string": "landed"
+                                            },
+                                            {
+                                                "value": 7,
+                                                "string": "shutdown"
                                             }
-                                        }
-                                    ]
+                                        ]
+                                    },
+                                    "switch_display": {
+                                        "namePosition": "top",
+                                        "nameAlign": "center",
+                                        "valueAlign": "center"
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Trigger",
+                            "key": "Valhala_I.Actuators.trigger",
+                            "children": [
+                                {
+                                    "name": "Blink LED",
+                                    "key": "Valhala_I.Actuators.blink_led",
+                                    "trigger": true
                                 }
                             ]
                         },
@@ -235,11 +230,11 @@ var TELEMETRY_TREE = {
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "Unfired"
+                                                "string": "False"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "Fired"
+                                                "string": "True"
                                             }
                                         ]
                                     },
@@ -257,11 +252,11 @@ var TELEMETRY_TREE = {
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "Unfired"
+                                                "string": "False"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "Fired"
+                                                "string": "True"
                                             }
                                         ]
                                     },
@@ -279,11 +274,11 @@ var TELEMETRY_TREE = {
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "Unfired"
+                                                "string": "False"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "Fired"
+                                                "string": "True"
                                             }
                                         ]
                                     },
@@ -311,11 +306,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "m",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 },
                                 {
@@ -324,11 +314,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "m",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 },
                                 {
@@ -337,11 +322,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "m",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 }
                             ]
@@ -356,11 +336,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "m/s",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 },
                                 {
@@ -369,11 +344,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "m/s",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 },
                                 {
@@ -382,11 +352,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "m/s",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 }
                             ]
@@ -401,11 +366,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "m/s^2",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 },
                                 {
@@ -414,11 +374,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "m/s^2",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 },
                                 {
@@ -427,11 +382,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "m/s^2",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 }
                             ]
@@ -446,11 +396,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 },
                                 {
@@ -459,11 +404,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 },
                                 {
@@ -472,11 +412,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 }
                             ]
@@ -491,11 +426,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 }
                             ]
@@ -510,11 +440,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "Pa",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 }
                             ]
@@ -529,11 +454,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 },
                                 {
@@ -542,11 +462,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 },
                                 {
@@ -555,11 +470,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "m",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 },
                                 {
@@ -568,11 +478,6 @@ var TELEMETRY_TREE = {
                                     "measurement": {
                                         "units": "unix_s",
                                         "format": "number"
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
                                     }
                                 }
                             ]
