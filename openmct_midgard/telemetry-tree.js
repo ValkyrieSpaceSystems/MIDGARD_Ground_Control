@@ -8,26 +8,26 @@ var TELEMETRY_TREE = {
             "key": "Valhala_I",
             "children": [
                 {
-                    "name": "Actuators",
-                    "key": "Valhala_I.Actuators",
+                    "name": "Actuator",
+                    "key": "Valhala_I.Actuator",
                     "children": [
                         {
-                            "name": "Lockout",
-                            "key": "Valhala_I.Actuators.lockout",
+                            "name": "Abort",
+                            "key": "Valhala_I.Actuator.abort",
                             "children": [
                                 {
                                     "name": "Abort",
-                                    "key": "Valhala_I.Actuators.abort",
+                                    "key": "Valhala_I.Actuator.abort",
                                     "measurement": {
                                         "format": "enum",
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "False"
+                                                "string": "Safe"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "True"
+                                                "string": "Aborted"
                                             }
                                         ]
                                     },
@@ -36,20 +36,26 @@ var TELEMETRY_TREE = {
                                         "nameAlign": "right",
                                         "valueAlign": "center"
                                     }
-                                },
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Lockout",
+                            "key": "Valhala_I.Actuator.lockout",
+                            "children": [
                                 {
                                     "name": "Main Lockout",
-                                    "key": "Valhala_I.Actuators.main_lock",
+                                    "key": "Valhala_I.Actuator.main_lock",
                                     "measurement": {
                                         "format": "enum",
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "False"
+                                                "string": "Disarmed"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "True"
+                                                "string": "Armed"
                                             }
                                         ]
                                     },
@@ -61,17 +67,17 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Pyro Arm",
-                                    "key": "Valhala_I.Actuators.pyro_arm",
+                                    "key": "Valhala_I.Actuator.pyro_arm",
                                     "measurement": {
                                         "format": "enum",
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "False"
+                                                "string": "Disarmed"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "True"
+                                                "string": "Armed"
                                             }
                                         ]
                                     },
@@ -83,17 +89,17 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Servo Arm",
-                                    "key": "Valhala_I.Actuators.servo_arm",
+                                    "key": "Valhala_I.Actuator.servo_arm",
                                     "measurement": {
                                         "format": "enum",
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "False"
+                                                "string": "Disarmed"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "True"
+                                                "string": "Armed"
                                             }
                                         ]
                                     },
@@ -105,17 +111,17 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Launch Arm",
-                                    "key": "Valhala_I.Actuators.launch_arm",
+                                    "key": "Valhala_I.Actuator.launch_arm",
                                     "measurement": {
                                         "format": "enum",
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "False"
+                                                "string": "Disarmed"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "True"
+                                                "string": "Armed"
                                             }
                                         ]
                                     },
@@ -129,21 +135,21 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Logging",
-                            "key": "Valhala_I.Actuators.logging",
+                            "key": "Valhala_I.Actuator.logging",
                             "children": [
                                 {
                                     "name": "Logging",
-                                    "key": "Valhala_I.Actuators.logging",
+                                    "key": "Valhala_I.Actuator.logging",
                                     "measurement": {
                                         "format": "enum",
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "False"
+                                                "string": "Off"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "True"
+                                                "string": "On"
                                             }
                                         ]
                                     },
@@ -157,11 +163,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Selector",
-                            "key": "Valhala_I.Actuators.selector",
+                            "key": "Valhala_I.Actuator.selector",
                             "children": [
                                 {
                                     "name": "Flight Phase",
-                                    "key": "Valhala_I.Actuators.flight_phase",
+                                    "key": "Valhala_I.Actuator.flight_phase",
                                     "measurement": {
                                         "format": "enum",
                                         "enumerations": [
@@ -209,32 +215,60 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Trigger",
-                            "key": "Valhala_I.Actuators.trigger",
+                            "key": "Valhala_I.Actuator.trigger",
                             "children": [
                                 {
                                     "name": "Blink LED",
-                                    "key": "Valhala_I.Actuators.blink_led",
+                                    "key": "Valhala_I.Actuator.blink_led",
                                     "trigger": true
                                 }
                             ]
                         },
                         {
-                            "name": "Pyro",
-                            "key": "Valhala_I.Actuators.pyro",
+                            "name": "Sequence",
+                            "key": "Valhala_I.Actuator.sequence",
                             "children": [
                                 {
-                                    "name": "Drogue Pyro",
-                                    "key": "Valhala_I.Actuators.pyro_drogue",
+                                    "name": "Test Sequence",
+                                    "key": "Valhala_I.Actuator.test_sequence",
                                     "measurement": {
                                         "format": "enum",
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "False"
+                                                "string": "Stopped"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "True"
+                                                "string": "Running"
+                                            }
+                                        ]
+                                    },
+                                    "switch_display": {
+                                        "namePosition": "top",
+                                        "nameAlign": "center",
+                                        "valueAlign": "center"
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Pyro",
+                            "key": "Valhala_I.Actuator.pyro",
+                            "children": [
+                                {
+                                    "name": "Drogue Pyro",
+                                    "key": "Valhala_I.Actuator.pyro_drogue",
+                                    "measurement": {
+                                        "format": "enum",
+                                        "enumerations": [
+                                            {
+                                                "value": 0,
+                                                "string": "Unfired"
+                                            },
+                                            {
+                                                "value": 1,
+                                                "string": "Fired"
                                             }
                                         ]
                                     },
@@ -246,17 +280,17 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Main Pyro",
-                                    "key": "Valhala_I.Actuators.pyro_main",
+                                    "key": "Valhala_I.Actuator.pyro_main",
                                     "measurement": {
                                         "format": "enum",
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "False"
+                                                "string": "Unfired"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "True"
+                                                "string": "Fired"
                                             }
                                         ]
                                     },
@@ -268,17 +302,17 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Motor Pyro",
-                                    "key": "Valhala_I.Actuators.pyro_motor",
+                                    "key": "Valhala_I.Actuator.pyro_motor",
                                     "measurement": {
                                         "format": "enum",
                                         "enumerations": [
                                             {
                                                 "value": 0,
-                                                "string": "False"
+                                                "string": "Unfired"
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "True"
+                                                "string": "Fired"
                                             }
                                         ]
                                     },
@@ -293,16 +327,16 @@ var TELEMETRY_TREE = {
                     ]
                 },
                 {
-                    "name": "Data_Streams",
-                    "key": "Valhala_I.Data_Streams",
+                    "name": "Data_Stream",
+                    "key": "Valhala_I.Data_Stream",
                     "children": [
                         {
                             "name": "Position",
-                            "key": "Valhala_I.Data_Streams.position",
+                            "key": "Valhala_I.Data_Stream.position",
                             "children": [
                                 {
                                     "name": "Position X",
-                                    "key": "Valhala_I.Data_Streams.pos_x",
+                                    "key": "Valhala_I.Data_Stream.pos_x",
                                     "measurement": {
                                         "units": "m",
                                         "format": "number"
@@ -310,7 +344,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Position Y",
-                                    "key": "Valhala_I.Data_Streams.pos_y",
+                                    "key": "Valhala_I.Data_Stream.pos_y",
                                     "measurement": {
                                         "units": "m",
                                         "format": "number"
@@ -318,7 +352,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Position Z",
-                                    "key": "Valhala_I.Data_Streams.pos_z",
+                                    "key": "Valhala_I.Data_Stream.pos_z",
                                     "measurement": {
                                         "units": "m",
                                         "format": "number"
@@ -328,11 +362,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Velocity",
-                            "key": "Valhala_I.Data_Streams.velocity",
+                            "key": "Valhala_I.Data_Stream.velocity",
                             "children": [
                                 {
                                     "name": "Velocity X",
-                                    "key": "Valhala_I.Data_Streams.vel_x",
+                                    "key": "Valhala_I.Data_Stream.vel_x",
                                     "measurement": {
                                         "units": "m/s",
                                         "format": "number"
@@ -340,7 +374,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Velocity Y",
-                                    "key": "Valhala_I.Data_Streams.vel_y",
+                                    "key": "Valhala_I.Data_Stream.vel_y",
                                     "measurement": {
                                         "units": "m/s",
                                         "format": "number"
@@ -348,7 +382,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Velocity Z",
-                                    "key": "Valhala_I.Data_Streams.vel_z",
+                                    "key": "Valhala_I.Data_Stream.vel_z",
                                     "measurement": {
                                         "units": "m/s",
                                         "format": "number"
@@ -358,11 +392,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Acceleration",
-                            "key": "Valhala_I.Data_Streams.acceleration",
+                            "key": "Valhala_I.Data_Stream.acceleration",
                             "children": [
                                 {
                                     "name": "Acceleration X",
-                                    "key": "Valhala_I.Data_Streams.accel_x",
+                                    "key": "Valhala_I.Data_Stream.accel_x",
                                     "measurement": {
                                         "units": "m/s^2",
                                         "format": "number"
@@ -370,7 +404,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Acceleration Y",
-                                    "key": "Valhala_I.Data_Streams.accel_y",
+                                    "key": "Valhala_I.Data_Stream.accel_y",
                                     "measurement": {
                                         "units": "m/s^2",
                                         "format": "number"
@@ -378,7 +412,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Acceleration Z",
-                                    "key": "Valhala_I.Data_Streams.accel_z",
+                                    "key": "Valhala_I.Data_Stream.accel_z",
                                     "measurement": {
                                         "units": "m/s^2",
                                         "format": "number"
@@ -388,11 +422,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Attitude",
-                            "key": "Valhala_I.Data_Streams.attitude",
+                            "key": "Valhala_I.Data_Stream.attitude",
                             "children": [
                                 {
                                     "name": "Pitch",
-                                    "key": "Valhala_I.Data_Streams.pitch",
+                                    "key": "Valhala_I.Data_Stream.pitch",
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
@@ -400,7 +434,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Roll",
-                                    "key": "Valhala_I.Data_Streams.roll",
+                                    "key": "Valhala_I.Data_Stream.roll",
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
@@ -408,7 +442,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Yaw",
-                                    "key": "Valhala_I.Data_Streams.yaw",
+                                    "key": "Valhala_I.Data_Stream.yaw",
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
@@ -418,11 +452,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Compass",
-                            "key": "Valhala_I.Data_Streams.compass",
+                            "key": "Valhala_I.Data_Stream.compass",
                             "children": [
                                 {
                                     "name": "Heading",
-                                    "key": "Valhala_I.Data_Streams.heading",
+                                    "key": "Valhala_I.Data_Stream.heading",
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
@@ -432,11 +466,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Pressure",
-                            "key": "Valhala_I.Data_Streams.pressure",
+                            "key": "Valhala_I.Data_Stream.pressure",
                             "children": [
                                 {
                                     "name": "Static Pressure",
-                                    "key": "Valhala_I.Data_Streams.static_pressure",
+                                    "key": "Valhala_I.Data_Stream.static_pressure",
                                     "measurement": {
                                         "units": "Pa",
                                         "format": "number"
@@ -445,12 +479,12 @@ var TELEMETRY_TREE = {
                             ]
                         },
                         {
-                            "name": "GPS",
-                            "key": "Valhala_I.Data_Streams.gps",
+                            "name": "Gps",
+                            "key": "Valhala_I.Data_Stream.gps",
                             "children": [
                                 {
                                     "name": "GPS Latitude",
-                                    "key": "Valhala_I.Data_Streams.gps_lat",
+                                    "key": "Valhala_I.Data_Stream.gps_lat",
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
@@ -458,7 +492,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "GPS Longitude",
-                                    "key": "Valhala_I.Data_Streams.gps_lon",
+                                    "key": "Valhala_I.Data_Stream.gps_lon",
                                     "measurement": {
                                         "units": "deg",
                                         "format": "number"
@@ -466,7 +500,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "GPS Altitude",
-                                    "key": "Valhala_I.Data_Streams.gps_alt",
+                                    "key": "Valhala_I.Data_Stream.gps_alt",
                                     "measurement": {
                                         "units": "m",
                                         "format": "number"
@@ -474,7 +508,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "GPS Time",
-                                    "key": "Valhala_I.Data_Streams.gps_time",
+                                    "key": "Valhala_I.Data_Stream.gps_time",
                                     "measurement": {
                                         "units": "unix_s",
                                         "format": "number"

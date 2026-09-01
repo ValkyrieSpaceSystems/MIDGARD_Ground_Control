@@ -15,9 +15,18 @@ Usage:
         peripherals[name] = peripheral(name, args)
 """
 
-import os, tomllib, csv
-from typing import Any
-from utility import get_element, combine_with_and
+import os, tomllib, threading, importlib.util, sys, time
+from utility import get_element, combine_with_and, label
+import numpy as np
+from queue import Queue, Empty, Full
+
+import nidaqmx
+from nidaqmx import stream_readers, DaqReadError
+from nidaqmx.stream_writers import DigitalSingleChannelWriter, DigitalMultiChannelWriter
+from nidaqmx.constants import TerminalConfiguration, AcquisitionType, LineGrouping, WAIT_INFINITELY
+import nidaqmx.system
+from labjack import ljm
+import Basilisk
 
 
 PERIPHERALS_ROOT = os.path.join(os.path.dirname(__file__), "Peripherals")
@@ -84,12 +93,39 @@ def _resolve_inheritance(manufacturer: str, id_name: str, _seen: set | None = No
     return merged
 
 
+def _load_element_function(manufacturer: str, module_name: str, function_name: str):
+    """
+    Dynamically loads a function from a .py file living alongside this
+    manufacturer's TOML configs, e.g. Peripherals/VSS/ignition_sequence.py.
+    Each call produces an independent module object (never cached in
+    sys.modules), so identical filenames across manufacturers never collide.
+    """
+    path = os.path.join(PERIPHERALS_ROOT, manufacturer, f"{module_name}.py")
+    if not os.path.exists(path):
+        print(f"[MIDGARD WARNING] Module not found: {path}")
+        return None
+
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as e:
+        print(f"[MIDGARD WARNING] Failed to load module '{module_name}': {e}")
+        return None
+
+    func = getattr(module, function_name, None)
+    if func is None:
+        print(f"[MIDGARD WARNING] Function '{function_name}' not found in '{module_name}'")
+        return None
+    return func
+
+
 # ── element classes ──────────────────────────────────────────────────────────
 
 
 class Interface:
     def __init__(self, entry: dict):
-        self.element_type: str    = "Interface"
+        self.element_class: str   = "Interface"
         self.id: str              = entry["id"]
         self.name: str            = entry.get("name", self.id)
         self.description: str     = entry.get("description", "")
@@ -99,6 +135,7 @@ class Interface:
         # radio fields
         self.freq: int | None     = entry.get("freq")
         self.unit: str | None     = "None"
+        self.remove: bool         = entry.get("remove", False)
 
     def __repr__(self):
         return f"Interface({self.id!r}, type={self.type!r})"
@@ -106,21 +143,24 @@ class Interface:
 
 class State:
     def __init__(self, entry: dict):
-        self.element_type: str      = "State"
+        self.element_class: str     = "State"
         self.id: str                = entry["id"]
         self.name: str              = entry.get("name", self.id)
         self.description: str       = entry.get("description", "")
         self.type: str              = entry.get("type", "")
         self.parent: str            = entry.get("parent", "")
         self.transition_to: list    = entry.get("transition_to", [])
+        self.transition_from        = []
         self.armed_by: list[str]    = entry.get("armed_by", [])
         self.disarmed_by: list[str] = entry.get("disarmed_by", [])
         self.arms                   = []
         self.disarms                = []
-        self.sources: list[str]     = entry.get("sources", []) 
+        self.sources: list[str]     = entry.get("sources", [])
+        self.control_type           = 'state'
         self.index: int | None      = None
         self.value: bool            = False
         self.nominal: bool          = False
+        self.remove: bool           = entry.get("remove", False)
 
     def __repr__(self):
         return f"State({self.id!r}, type={self.type!r}, value={self.value})"
@@ -128,60 +168,70 @@ class State:
 
 class Actuator:
     def __init__(self, entry: dict, parent):
-        self.element_type: str      = "Actuator"
-        self.parent                 = parent
-        self.id: str                = entry["id"]
-        self.name: str              = entry.get("name", self.id)
-        self.description: str       = entry.get("description", "")
-        self.type: str              = entry["type"]
-        self.subtype: str | None    = entry.get("subtype")
-        self.armed_by: list[str]    = entry.get("armed_by", [])
-        self.disarmed_by: list[str] = entry.get("disarmed_by", [])
-        self.arms                   = []
-        self.disarms                = []
-        self.sources: list[str]     = entry.get("sources", []) 
-        self.debug_only: bool       = entry.get("debug_only", False)
-        self.switch_display: dict   = entry.get("switch_display", {})
+        self.element_class: str        = "Actuator"
+        self.parent                    = parent
+        self.id: str                   = entry["id"]
+        self.name: str                 = entry.get("name", self.id)
+        self.description: str          = entry.get("description", "")
+        self.type: str                 = entry["type"]
+        self.subtype: str | None       = entry.get("subtype", None)
+        self.module_num: int | None    = entry.get("module", None) 
+        self.module                    = None
+        self.writer                    = None
+        self.channel: int | str | None = entry.get("channel", None) # 1, FIN0
+        self.sync_group: str | None    = entry.get("sync_group")
+        self.armed_by: list[str]       = entry.get("armed_by", [])
+        self.disarmed_by: list[str]    = entry.get("disarmed_by", [])
+        self.arms                      = []
+        self.disarms                   = []
+        self.sources: list[str]        = entry.get("sources", [])
+        self.debug_only: bool          = entry.get("debug_only", False)
+        self.debug_sources: list[str]  = entry.get("debug_sources", [])
+        self.switch_display: dict      = entry.get("switch_display", {})
+        self.remove: bool              = entry.get("remove", False)
         
+        if parent.debug_mode:
+            self.sources = list(dict.fromkeys(list(self.sources) + self.debug_sources))
         
         if self.type == 'selector':
-            self.control_type        = 'selector'
-            self.default: str | None = entry.get("default", None)
-            self.nominal: bool       = entry.get("nominal", self.default)
-            self.states: dict        = {}
-            self.states_index: list  = []
-            self.states_name: list   = []
+            self.control_type       = 'selector'
+            self.states: dict       = {}
+            self.states_index: list = []
+            self.states_name: list  = []
+                
+        elif self.type == 'abort': 
+            self.control_type      = 'switch'
+            self.nominal_state     = 'Safe'
+            self.off_nominal_state = 'Aborted'
                 
         elif self.type == 'lockout': 
             self.control_type      = 'switch'
-            self.default: bool     = entry.get("default", False)
-            self.nominal: bool     = entry.get("nominal", self.default)
             self.nominal_state     = 'Disarmed'
             self.off_nominal_state = 'Armed'
                 
         elif self.type == 'logging': 
             self.control_type      = 'switch'
-            self.default: bool     = entry.get("default", False)
-            self.nominal: bool     = entry.get("nominal", self.default)
             self.nominal_state     = 'Off'
             self.off_nominal_state = 'On'
             
         elif self.type == 'trigger':
-            self.control_type        = 'button'
-            self.default             = 1
-            self.nominal             = 1
-            self.trigger: str | None = entry.get("trigger", None)
+            self.control_type  = 'button'
+            self.module        = entry.get("module") # file
+            self.function_name = entry.get("function", "run") # function in file, default function is run()
+            self.func          = _load_element_function(parent.manufacturer, self.module, self.function_name) if self.module else None
             
         elif self.type == 'sequence':
-            self.control_type         = 'switch'
-            self.default              = None
-            self.nominal              = None
-            self.sequence: str | None = entry.get("sequence", None)
+            self.control_type  = 'switch'
+            self.nominal_state     = 'Stopped'
+            self.off_nominal_state = 'Running'
+            self.module        = entry.get("module", None) # file
+            self.function_name = entry.get("function", "run") # function in file, default function is run()
+            self.func          = _load_element_function(parent.manufacturer, self.module, self.function_name) if self.module is not None else None
+            self.thread = None
+            self.stop_event = threading.Event()
             
         elif self.type == 'valve': 
             self.control_type  = 'switch'
-            self.default: bool = entry.get("default", False)
-            self.nominal: bool = entry.get("nominal", self.default)
             if self.default == False:
                 self.nominal_state = 'Closed'
                 self.off_nominal_state = 'Open'
@@ -194,8 +244,6 @@ class Actuator:
             self.pin: int | None             = entry.get("pin")
             self.unit: str | None            = entry.get("unit")
             self.range: tuple | None         = tuple(entry["range"]) if "range" in entry else None
-            self.default: float | None       = entry.get("default_position")
-            self.nominal: float | None       = entry.get("nominal_position") or self.default
             self.slew_rate_max: float | None = entry.get("slew_rate_max")
             self.scale: float | None         = entry.get("scale")
             self.offset: float | None        = entry.get("offset")
@@ -203,16 +251,40 @@ class Actuator:
         elif self.type == 'pyro': 
             self.control_type          = 'switch' # cluster
             self.cluster_quantity      = 2
-            self.channel: int | None   = entry.get("channel")
-            self.channel_a: int | None = entry.get("channel_a")
-            self.channel_b: int | None = entry.get("channel_b")
-            self.default: bool         = False
-            self.nominal: bool         = False
+            self.pyro_channel: int | None   = entry.get("channel", None)
+            self.pyro_channel_a: int | None = entry.get("channel_a", None)
+            self.pyro_channel_b: int | None = entry.get("channel_b", None)
             self.nominal_state         = 'Unfired'
             self.off_nominal_state     = 'Fired'
         
-        else:
+        elif self.type == 'ssr':
             self.control_type = 'switch'
+            self.nominal_state     = 'Off'
+            self.off_nominal_state = 'On'
+        
+        else:
+            print(f'[MIDGARD WARNING] Element {self.name} has unknown type {self.type}')
+            
+            
+        if self.control_type == "switch":
+            self.default: bool = entry.get("default", False)
+            self.nominal: bool = False
+        elif self.control_type == "button":
+            self.default = 1
+            self.nominal = 1
+        elif self.control_type == "selector":
+            self.default: str | int | None = entry.get("default", None)
+            self.nominal: str | int | None = entry.get("nominal", self.default)
+        elif self.control_type == "cluster":
+            self.default: list[bool] = [entry.get("default", False)] * self.cluster_quantity
+            self.default: list[bool] = [entry.get("nominal", entry.get("default", False))] * self.cluster_quantity
+        elif self.control_type == None:
+            self.default: float | None = entry.get("default", None)
+            self.nominal: float | None = entry.get("nominal", self.default)
+            
+        if self.type == 'pyro': # Hard coded for safety
+            self.default: bool = False
+            self.nominal: bool = False
         
         
         # ── Build selector-type actuators from sibling [[state]] entries ──────────
@@ -264,24 +336,28 @@ class Actuator:
 
 class DataStream:
     def __init__(self, entry: dict, parent):
-        self.element_type: str            = "Data_Stream"
+        self.element_class: str           = "Data_Stream"
         self.parent                       = parent
         self.id: str                      = entry["id"]
         self.name: str                    = entry.get("name", self.id)
         self.description: str             = entry.get("description", "")
         self.type: str                    = entry["type"]
         self.subtype: str | None          = entry.get("subtype", None)
+        self.module_num: int | None       = entry.get("module", None) 
+        self.module                       = None
+        self.channel: int | str | None    = entry.get("channel", None) # 1, AIN0
         self.unit: str | None             = entry.get("unit", None)
         self.range: tuple                 = tuple(entry.get("range", []))
         self.nominal: tuple               = tuple(entry.get("nominal", []))
         self.component: str | None        = entry.get("component")
-        self.sample_rate_hz: float | None = entry.get("sample_rate_hz")
-        self.scale: float | None          = entry.get("scale")
-        self.offset: float | None         = entry.get("offset")
+        self.sample_rate_hz: float | None = entry.get("sample_rate_hz", None)
+        self.scale: float | int | None    = entry.get("scale",1)
+        self.offset: float | int | None   = entry.get("offset",0)
         # runtime state
         self.control_type                 = None
         self.value: float | None          = None
         self.key                          = None
+        self.remove: bool                 = entry.get("remove", False)
 
     def in_range(self) -> bool:
         if self.value is None:
@@ -295,38 +371,230 @@ class DataStream:
 
     def __repr__(self):
         if self.unit == None:
-            return f"Actuator({self.id!r}, type={self.type!r}, value={self.value})"
+            return f"DataStream({self.id!r}, type={self.type!r}, value={self.value})"
         else:
-            return f"Actuator({self.id!r}, type={self.type!r}, value={self.value} {self.unit})"
+            return f"DataStream({self.id!r}, type={self.type!r}, value={self.value} {self.unit})"
+        
+    
+class NIModule:
+    def __init__(self, entry: dict, parent):
+        self.element_class: str     = "NI_Module"
+        self.parent                 = parent
+        self.id: str                = entry["id"]
+        self.name: str              = entry.get("name", self.id)
+        self.description: str       = entry.get("description", "")
+        self.type: int              = entry["type"] #9205, 9253, 9213, etc
+        self.module_num: int | None = entry.get("module", None) # 0, 1, 2, etc
+        self.pull_freq: int | None  = entry.get("pull_freq", None)
+        self.push_freq: int | None  = entry.get("push_freq", None)
+        self.remove: bool           = entry.get("remove", False)
+        
+        self.channels = []
+        self.task = None
+        self.reader = None
+        self.writer = None
+        
+        for device in self.parent.devices:
+            device_cdaq = device.name[device.name.find('cDAQ'):device.name.find('Mod')]
+            device_mod_num = int(device.name[device.name.find('Mod')+3:])-1
+            if device_cdaq == self.parent.device and device_mod_num == self.module_num:
+                if self.type == 9205: # Voltage (Pressure Transducer)
+                    #print(f"NI-9205 Analog Voltage Input Module {device.name} Connected")
+                    try:
+                        self.task = nidaqmx.Task()
+                        self.task.ai_channels.add_ai_voltage_chan(
+                            f'{device.name}/ai0:31',
+                            terminal_config=TerminalConfiguration.RSE,
+                            min_val=-10, max_val=10
+                        )
+                        self.channels = [None] * 32
+                        self.parent.tasks[self.id] = self.task
+                    except Exception as e:
+                        _, _, tb = sys.exc_info()
+                        raise ConnectionError(f"NI Initialization Error: Failed to add PT voltage channels {device.name}: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+    
+                elif self.type == 9253: # Current (Pressure Transducer)
+                    #print(f"NI-9253 Analog Current Input Module {device.name} Connected")
+                    try:
+                        self.task = nidaqmx.Task()
+                        self.task.ai_channels.add_ai_current_chan(
+                            f'{device.name}/ai0:7',
+                            terminal_config=TerminalConfiguration.RSE,
+                            min_val=-0.02, max_val=0.02, # ±20 mA range
+                            units=nidaqmx.constants.CurrentUnits.AMPS
+                        )
+                        self.channels = [None] * 8
+                        self.parent.tasks[self.id] = self.task
+                    except Exception as e:
+                        _, _, tb = sys.exc_info()
+                        raise ConnectionError(f"NI Initialization Error: Failed to add PT current channels {device.name}: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+    
+                elif self.type == 9213: # Thermocouple
+                    #print(f"NI-9213 Thermocouple Module {device.name} Connected")
+                    try:
+                        self.task = nidaqmx.Task()
+                        self.task.ai_channels.add_ai_thrmcpl_chan(
+                        physical_channel=f'{device.name}/ai0:7',
+                        min_val=-200, max_val=1260,
+                        thermocouple_type=nidaqmx.constants.ThermocoupleType.K,
+                        cjc_source=nidaqmx.constants.CJCSource.BUILT_IN
+                        )
+                        self.channels = [None] * 8
+                        self.parent.tasks[self.id] = self.task
+                    except Exception as e:
+                        _, _, tb = sys.exc_info()
+                        raise ConnectionError(f"NI Initialization Error: Failed to add channels {device.name}: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+    
+                elif self.type == 9237: # Load Cell
+                    #print(f"NI-9237 Load Cell Module {device.name} Connected")
+                    try:
+                        self.task = nidaqmx.Task()
+                        self.task.ai_channels.add_ai_force_bridge_table_chan(
+                            f"{device.name}/ai0:3",
+                            min_val=0,
+                            max_val=2000,
+                            voltage_excit_val=10,
+                            nominal_bridge_resistance=700,
+                            electrical_vals=[0, -0.3710, -0.7418, -1.0200, -1.3909, -1.8547],
+                            physical_vals=[0, 400, 800, 1100, 1500, 2000]
+                        )
+                        self.channels = [None] * 4
+                        self.parent.tasks[self.id] = self.task
+                    except Exception as e:
+                        _, _, tb = sys.exc_info()
+                        raise ConnectionError(f"NI Initialization Error: Failed to add LC channels {device.name}: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+                    
+                elif self.type == 9485: # SSR
+                    #print(f"NI-9485 SSR Module {device.name} Connected")
+                    self.task = nidaqmx.Task()
+                    self.writer = DigitalMultiChannelWriter(self.task.out_stream)
+                    for line in range(8):
+                        self.task.do_channels.add_do_chan(f"{device.name}/port0/line{line}")
+                    self.writer.write_one_sample_one_line(np.array([False]*8)) # Write all channels nominal at start
+                    self.channels = [None] * 8
+                    self.parent.writers[self.id] = self.writer
+                    
+                else:
+                    #print(f"Unknown NI Module {device.product_type} {device.name}. Ignoring")
+                    # check if any data_streams or modules use this 
+                    raise
+        
+        for element in list(self.parent.actuators.values()) + list(self.parent.data_streams.values()):
+            if element.module_num == self.module_num:
+                element.module = self
+                self.channels[element.channel] = element
+        
+        if self.type in [9205, 9253, 9213, 9237]:
+            self.update_interval = round(self.pull_freq / self.push_freq)
+            self.task.timing.cfg_samp_clk_timing(rate=self.pull_freq, sample_mode=AcquisitionType.CONTINUOUS)
+            self.task.in_stream.input_buf_size = self.pull_freq * 5 
+            self.task.in_stream.overwrite = nidaqmx.constants.OverwriteMode.OVERWRITE_UNREAD_SAMPLES
+            self.reader = stream_readers.AnalogMultiChannelReader(self.task.in_stream)
+            
+            self.task.register_every_n_samples_acquired_into_buffer_event(self.update_interval, self.callback)
+            self.task.start()
+            
+        elif self.type in [9485]:
+            self.task.start()
+        
+    def callback(self, task_idx, event_type, num_samples, cb_data=None):
+        '''generic_callback(num_samples, 'PT', pt_units, pt_reader, num_pt_chan, pt_scaling, pt_names)'''
+        ts_end = int(time.time() * 1000)
+        data = {}
+        buffer = np.zeros((len(self.channels), num_samples), dtype=np.float64)
+        self.reader.read_many_sample(buffer, num_samples, timeout=WAIT_INFINITELY)
+        sensor_data = buffer.T # convert from arrays for each sensor full of data points for each timestamp to arrays for each timestamp full of data points for each sensor
+        if len(sensor_data) == 0:
+            return 0
+
+        sensor_data = np.array(sensor_data).T
+                                    
+        for i, sample in enumerate(sensor_data): # Number of data samples
+            ts = ts_end - (len(sensor_data) - i) * (1/self.pull_freq) * 1e9  # the timestamp we get is from the last data point so we need to calculate the timestamps backwards from this
+            data[ts] = {}
+            for j, channel in enumerate(self.channels): # Number of channels
+                data[ts][channel.key] = sample[j] * channel.scale + channel.offset
+                
+        self.parent.data_queue.put_nowait(data)
 
 
 # ── Peripheral class ───────────────────────────────────────────────────────────
 
 class Peripheral:
-    def __init__(self, stop_event, name: str, args: dict):
+    def __init__(self, stop_event, debug_mode, name: str, args: dict):
+        self.stop_event = stop_event
+        self.debug_mode = debug_mode
         self.name:         str = name
         self.interface_id: str = args["interface"]
         self.manufacturer: str = args["manufacturer"]
         self.id:           str = args["id"]
+        self.data_queue        = Queue(maxsize=10000)
 
         raw  = _resolve_inheritance(self.manufacturer, self.id)
         meta = raw.get("meta", {})
+        
 
         # ── Meta ───────────────────────────────────────────────────────
-        self.display_name: str    = meta.get("name", self.id)
-        self.description: str     = meta.get("description", "")
-        self.type: str            = meta.get("type", "unknown")
-        self.notes: str           = meta.get("notes", "")
-        self.phase: str           = meta.get("first_phase", "")
-        self.switch_display: dict = meta.get("switch_display", {})
+        self.display_name: str     = meta.get("name", self.id)
+        self.description: str      = meta.get("description", "")
+        self.type: str             = meta.get("type", "unknown")
+        self.notes: str            = meta.get("notes", "")
+        self.phase: str            = meta.get("first_phase", "")
+        self.switch_display: dict  = meta.get("switch_display", {})
+        self.device: str           = meta.get("device", []) #cDAQ1, T7, etc
+        self.pull_freq: int | None = meta.get("pull_freq", None)
+        self.push_freq: int | None = meta.get("push_freq", None)
+        
+        # ── Config Manufacturer ────────────────────────────────────────────
+        if self.manufacturer == 'NI':
+            self.system = nidaqmx.system.System.local()
+            self.devices = self.system.devices
+            self.tasks = {}
+            self.writers = {}
+            
+        elif self.manufacturer == 'LabJack':
+            self.handle = ljm.openS(self.device, "ANY", "ANY")
 
         # ── Element Dicts ────────────────────────────────────────────
         self.interfaces: dict[str, Interface] = {e["id"]: Interface(e) for e in raw.get("interface", [])}
         self.states: dict[str, State] = {e["id"]: State(e) for e in raw.get("state", [])}
         self.actuators: dict[str, Actuator] = {e["id"]: Actuator(e, self) for e in raw.get("actuator", [])}
         self.data_streams: dict[str, DataStream] = {e["id"]: DataStream(e, self) for e in raw.get("data_stream", [])}
+        self.ni_modules: dict[str, NIModule] = {e["id"]: NIModule(e, self) for e in raw.get("ni_modules", [])}
         
-        self.elements = self.interfaces | self.states | self.actuators | self.data_streams
+        self.elements = self.interfaces | self.states | self.actuators | self.data_streams | self.ni_modules
+        self.element_lookup = {
+            'Interface': self.interfaces,
+            'State': self.states,
+            'Actuator': self.actuators,
+            'Data_Stream': self.data_streams,
+            'NI_Module': self.ni_modules
+        }
+
+        # ── Configure LabJack ──────────────────────────────────────────\
+        if self.manufacturer == 'LabJack':
+            self.labjack_actuators = [element for element in self.actuators.values() if element.channel is not None]
+            
+            # LabJack Config
+            ljm.eWriteName(self.handle, "STREAM_TRIGGER_INDEX", 0) # Ensure triggered stream is disabled.
+            ljm.eWriteName(self.handle, "STREAM_CLOCK_SOURCE", 0) # Enabling internally-clocked stream.
+            
+            # AIN ranges are +/-10 V and stream resolution index is 0 (default).
+            aNames = ["AIN_ALL_RANGE", "STREAM_RESOLUTION_INDEX"]
+            aValues = [10.0, 0]
+
+            # set to single ended and auto settling time
+            aNames.extend(["AIN_ALL_NEGATIVE_CH", "STREAM_SETTLING_US"])
+            aValues.extend([ljm.constants.GND, 0])
+            
+            self.channels = [elem for elem in self.data_streams if elem.channel is not None]
+            self.aScanListNames = [elem.channels for elem in self.channels]
+            self.numAddresses = len(self.aScanListNames)
+            aScanList = ljm.namesToAddresses(self.numAddresses, self.aScanListNames)[0]
+            
+            sensor_update_interval = round(self.pull_freq / self.sensor_push_freq)
+            
+            ljm.eStreamStart(self.handle, sensor_update_interval, self.numAddresses, aScanList, self.pull_freq)
 
         # ── Update Armed and Disarmed With Element Objects ─────────────
         for element in self.elements.values():
@@ -352,9 +620,29 @@ class Peripheral:
                     cond_id = cond_key.split('.')[-1]
                     cond = self.elements[cond_id]
                     element.transition_to[cond_index] = cond
-                
-        
+                    cond.transition_from.append(element)
 
+        # ── Remove elements ────────────────────────────────────────────
+        to_remove = []
+        for element in self.elements.values():
+            if element.remove == True:
+                reasons = []
+                if element.arms:
+                    reasons.append(f"it arms {[elem.name for elem in element.arms]}")
+                if hasattr(element, 'transition_to'):
+                    for elem in element.transition_to:
+                        if elem.transition_from == [element]:
+                            reasons.append(f"it is the only way to transition to {elem.name}")
+
+                if reasons:
+                    print(f"[MIDGARD WARNING] element {element.name} cannot be removed because {combine_with_and(reasons)}")
+                else:
+                    to_remove.append(element)
+                    
+        for element in to_remove:
+            self.element_lookup[element.element_class].pop(element.id)
+            self.elements.pop(element.id)
+            
         # ── Select active interface ────────────────────────────────────
         self.active_interface: Interface | None = self.interfaces.get(self.interface_id)
         if self.active_interface is None:
@@ -363,6 +651,11 @@ class Peripheral:
         # ── Validate references ────────────────────────────────────────
         self._validate()
 
+    # ── NI ─────────────────────────────────────────────────────────────
+    def get_ssr_array(self):
+        for elem in self.actuators:
+            pass
+    
     # ── Validation ─────────────────────────────────────────────────────
 
     def _validate(self):

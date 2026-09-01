@@ -5,7 +5,7 @@ from datetime import datetime, UTC
 
 from peripheral import Peripheral
 from openmct import OpenMCTServer, TelemetryServer, buildOpenMCTjs
-from utility import get_element, combine_with_and
+from utility import get_element, combine_with_and, label
 
 import nidaqmx
 from nidaqmx import stream_readers, DaqReadError
@@ -21,14 +21,18 @@ peripheral folder containing folders for each manufacturer, each manufacturer ha
 
 peripherals are made of elements (data streams, actuators, lockouts, interfaces, and phases)
 
+for NI each cDAQ is a single peripheral
+
 
 openmct was built with npm run build and is being served by fastapi through python. sqlite is the telemetry server serving realtime and historical data. 
-
-element id and type cannot be the same (ie id = "heading" type = "heading")
 
 toml default is the state midgard writes automatically at startup, a value of false is the nominal/safe position (ie normally open or normally closed is the safe state and configured in hardware to equate with a value of false)
 
 abort and logging actuators cannot have sources
+
+if id and type are the same, the type folder will collapse and become the element object. if id and type are the same, no other elements of that type will be supported for that peripheral
+
+cannot have duplicate ids of the same element class
 
 '''
 
@@ -40,7 +44,8 @@ simulated_data = True
 log_data = True # Boolean. Log data to csv
 log_actuations = True # Boolean. Log GUI commands to csv
 print_switch_changes = True # Boolean. Print switch state changes to python terminal
-save_csv = False # Boolean. If False, deletes csv files after run. Should only be False in testing
+keep_csv = False # Boolean. If False, deletes csv files after run. Should only be False in testing
+openmct_dir = '' # String of absolute file path. Directory where OpenMCT is installed. Will attempt to install if it doesn't already exist. If left blank (ie ''), will use openmct folder inside current working directory.
 log_output_dir = '' # String of absolute file path. Directory where to store log files. Will attempt to make directory if it doesn't already exist. If left blank (ie ''), will use logs folder inside current working directory.
 confirmation_keys = [pynput.keyboard.Key.shift] # List of single character strings for keys or pynput.keyboard.Key for which keys to press to enable switch actuation. Uses AND logic. Leave empty for no confirmation [DANGEROUS!!!]
 
@@ -51,6 +56,8 @@ peripherals = {
     #'labjack':{'interface':'usb', 'manufacturer':'LabJack', 'id':'1'},
 }
 
+# check user configs
+
 threads = []
 servers = []
 stop_event = threading.Event()
@@ -59,34 +66,54 @@ non_abort_shutdown = threading.Event()
 startup_event = threading.Event()
 
 for name, args in peripherals.items():
-    peripherals[name] = Peripheral(stop_event, name, args)
+    peripherals[name] = Peripheral(stop_event, debug_mode, name, args)
+    
+sync_groups: dict[str, list] = {}
+for p in peripherals.values():
+    for elem in p.actuators.values():
+        group = elem.sync_group
+        if group:
+            sync_groups.setdefault(group, []).append(elem)
 
 data_tree, all_keys = buildOpenMCTjs(peripherals)
 
-openmct = OpenMCTServer(port=4000, show_logs=show_server_logs)
+#print(data_tree)
+#print(all_keys)
+
+openmct = OpenMCTServer(port=4000, openmct_dir=openmct_dir, show_logs=show_server_logs)
 telemetry = TelemetryServer(stop_event, log_data=log_data, log_actuations=log_actuations, log_output_dir=log_output_dir, port=4001, show_logs=show_server_logs)
 
 
-def write_actuation(key, requested, source, do_print=True, pressed=True, missing_keys=[]):
+def write_actuation(key, requested, source, do_print=True, pressed=True, missing_keys=[], bypass_checks=False):
     element = get_element(data_tree, key)
     try:
         if not stop_event.is_set():
+            to_actuate = []
+            
             if element.control_type == "switch":
                 requested = bool(requested)
+            elif element.control_type == "selector":
+                if isinstance(requested, str):
+                    requested = element.states[requested].index
             
-            # evaluate requested
             
+            # Evaluation of Request
             if element.control_type == "selector":
                 current_state = element.states_index[element.value]
                 requested_state = element.states_index[requested]
+                valid_source = True if source in requested_state.sources or requested_state.sources == [] else False
                 valid_transition = True if requested_state in current_state.transition_to else False
                 inhibited = any(not bool(elem.value) for elem in requested_state.armed_by) or any(bool(elem.value) for elem in requested_state.disarmed_by)
-                
             else:
                 valid_transition = True
+                valid_source = True if source in element.sources or element.sources == [] else False
                 inhibited = any(not bool(elem.value) for elem in element.armed_by) or any(bool(elem.value) for elem in element.disarmed_by)
-            
-            valid_source = True if source in element.sources or element.sources == [] else False
+                
+            if bypass_checks:
+                pressed = True
+                valid_source = True
+                valid_transition = True
+                inhibited = False
             
             if not pressed or not valid_source or not valid_transition: # Stay the same
                 value = element.value
@@ -96,32 +123,27 @@ def write_actuation(key, requested, source, do_print=True, pressed=True, missing
                 value = requested
                 
                 
-            # Global Logic
-            if key.split('.')[-1].lower() == 'abort':
+            # Sync Groups
+            if element.sync_group == 'abort':
                 if value:
                     abort('Digital Abort')
                 elif not value:
                     unabort()
-                
-                for elem_key in all_keys: # set all other abort actuators 
-                    if elem_key.split('.')[-1].lower() == 'abort' and elem_key != key:
-                        elem = get_element(data_tree, elem_key)
-                        if elem.element_type == 'Actuator':
-                            telemetry.send(int(time.time() * 1000), elem.key, value, data_tree, source)
-                            
-            elif key.split('.')[-1].lower() == 'logging':
+            
+            elif element.sync_group == 'logging':
                 if value:
                     telemetry.start_logging()
                 elif not value:
                     telemetry.stop_logging()
                 
-                for elem_key in all_keys: # set all other logging actuators 
-                    if elem_key.split('.')[-1].lower() == 'logging' and elem_key != key:
-                        elem = get_element(data_tree, key)
-                        if elem.element_type == 'Actuator':
-                            telemetry.send(int(time.time() * 1000), elem.key, value, data_tree, source)
-            
-            
+            if element.sync_group:
+                for elem in sync_groups.get(element.sync_group, []):
+                    if elem is not element:
+                        telemetry.send(int(time.time() * 1000), elem.key, value, data_tree, source)
+                        to_actuate.append(elem)
+                 
+                 
+            # Normalization
             if value == True:
                 affect_array = element.disarms
             elif value == False:
@@ -129,42 +151,76 @@ def write_actuation(key, requested, source, do_print=True, pressed=True, missing
             elif element.control_type == 'selector':
                 affect_array = element.states_index[value].disarms + element.states_index[element.value].arms 
                 
-            to_nominalize = [elem for elem in affect_array if elem.value == True] # list of all switches to nominalize with this switches actuation
+            to_nominalize = [elem for elem in affect_array if elem.value == True and elem.control_type != 'button'] # list of all switches to nominalize with this switches actuation
                 
             if to_nominalize:
                 prop_complete = False
                 while not prop_complete: # this populates the to_nominalize array with all the elements to be nominalized by the nominalizing of all the elements already in to_nominalize
                     start = to_nominalize
                     for e in to_nominalize:
-                        to_nominalize = to_nominalize + [elem for elem in e.arms if elem not in to_nominalize and elem.value == True]
+                        to_nominalize = to_nominalize + [elem for elem in e.arms if elem not in to_nominalize and elem.value == True and elem.control_type != 'button']
                     if to_nominalize == start: prop_complete = True                    
                 for elem in to_nominalize: # Nominalize the elements
-                    if elem.element_type == 'State':
+                    if elem.element_class == 'State':
                         par = elem.parent
-                        telemetry.send(int(time.time() * 1000), par.key, par.nominal, data_tree, source)
+                        telemetry.send(int(time.time() * 1000), par.key, par.nominal, data_tree, source, immediate=True)
+                        to_actuate.append(par)
+                    if elem.type == 'sequence':
+                        elem.stop_event.set()
+                        if elem.thread != None:
+                            elem.thread.join()
+                            threads.remove((elem.name, elem.thread))
+                            elem.thread = None
+                        telemetry.send(int(time.time() * 1000), elem.key, elem.nominal, data_tree, source, immediate=True)
+                        to_actuate.append(elem)
                     else:
-                        telemetry.send(int(time.time() * 1000), elem.key, elem.nominal, data_tree, source)
-                    
-                    
-                    ##############
-                    # Stop Sequences
-                    ##############
-                    
+                        telemetry.send(int(time.time() * 1000), elem.key, elem.nominal, data_tree, source, immediate=True)
+                        to_actuate.append(elem)
+                 
+                 
+            # Triggers and Sequences
+            if element.type == "trigger" and pressed and not inhibited and valid_source:
+                element.func(stop_event,element)
+            elif element.type == 'sequence':
+                if value:
+                    element.stop_event.clear()
+                    if element.thread == None:
+                        element.thread = threading.Thread(target=element.func, args=(stop_event,element), daemon=True)
+                        element.thread.start()
+                        threads.append((element.name, element.thread))
+                else:
+                    element.stop_event.set()
+                    if element.thread != None:
+                        element.thread.join()
+                        threads.remove((element.name, element.thread))
+                        element.thread = None
+
             
-            telemetry.send(int(time.time() * 1000), element.key, value, data_tree, source)
+            telemetry.send(int(time.time() * 1000), element.key, value, data_tree, source, immediate=True)
+            to_actuate.append(element)
             
             
-            ##############
-            # Perform Actuation
-            ##############
-            if element.parent.manufacturer == "VSS":
-                pass
-            elif element.parent.manufacturer == "NI":
-                pass
-            elif element.parent.manufacturer == "LabJack":
-                pass
+            # Physical Actuation
+            write_ni = False
+            ni_peripherals = []
+            for elem in to_actuate:
+                if elem.type in ['valve','ssr','servo','pyro']:
+                    if elem.parent.manufacturer == "VSS":
+                        pass
+                    elif elem.parent.manufacturer == "NI":
+                        write_ni = True
+                        if elem.parent not in ni_peripherals:
+                            ni_peripherals.append(elem.parent)
+                    elif elem.parent.manufacturer == "LabJack":
+                        ljm.eWriteName(elem.parent.handle, elem.channel, elem.value)
+            if write_ni:
+                for parent in ni_peripherals:
+                    for module in parent.ni_modules:
+                        if module.writer != None:
+                            module.writer.write_one_sample_one_line(np.array([[elem.value if elem is not None else False for elem in module.channels]]))
+                
             
-            
+            # Printing
             if do_print: 
                 if to_nominalize:
                     print(f'{element.name} now inhibiting and setting nominal {[elem.name for elem in to_nominalize]}')
@@ -183,6 +239,8 @@ def write_actuation(key, requested, source, do_print=True, pressed=True, missing
                         
                     if element.control_type == "button":
                         control_type_display = f"triggered"
+                    elif element.type == "sequence":
+                        control_type_display = f"{display_value}"
                     else:
                         control_type_display = f"set to {display_value}"
                                             
@@ -206,22 +264,19 @@ def write_actuation(key, requested, source, do_print=True, pressed=True, missing
                                 missing_key_names.append(k.name.replace('_', ' ').title())
                         
                         reasons.append(f"{missing_key_names} not pressed")
-                        
-                    if not valid_source:
-                        reasons.append(f"{source} not valid source {element.sources}")
-                        
-                    if not valid_transition:
-                        reasons.append(f"{requested_state.name} not valid transition path {[s.name for s in current_state.transition_to]}")
+                    
+                    if element.control_type == 'selector':
+                        if not valid_source:
+                            reasons.append(f"{source} not valid source {requested_state.sources}")
+                            
+                        if not valid_transition:
+                            reasons.append(f"{requested_state.name} not valid transition {[s.name for s in current_state.transition_to]}")
+                    else:
+                        if not valid_source:
+                            reasons.append(f"{source} not valid source {element.sources}")
                         
                     print(f"{element.name} command ignored because {combine_with_and(reasons)}")
-                
-            
-            ##############
-            # Perform Triggers and Sequences
-            ##############
-            if element.type == "trigger" and pressed and not inhibited and valid_source:
-                print('TRIGGER')
-            
+
                     
     except Exception as e:
         _, _, tb = sys.exc_info()
@@ -235,6 +290,16 @@ def abort(cause='', verbose_cause=True, verbose_abort=True): # A digital abort e
             ###
             # Peripheral Abort Logic
             ###
+            for peripheral in peripherals.values():
+                if peripheral.manufacturer == 'VSS':
+                    pass
+                
+                elif peripheral.manufacturer == 'NI':
+                    for writer in peripheral.writers: # Iterates through all writers and sets all channels on each module to false
+                        writer.write_one_sample_one_line(np.array([False]*8))
+                    
+                elif peripheral.manufacturer == 'LabJack':
+                    ljm.eWriteNames(peripheral.handle, len(peripheral.labjack_actuators), [elem.channel for elem in peripheral.labjack_actuators], [0]*len(peripheral.labjack_actuators))
                     
             if verbose_abort: 
                 print("\nABORTING\nABORTING\nABORTING\n")
@@ -256,7 +321,7 @@ def shutdown(do_abort=True):
     try:
         if do_abort: # this is the propper shutdown
             try: # Ensure all relays are turned off on exit
-                abort('Shut Down', True, False)
+                abort('Shut Down', False, False)
             except Exception as e:
                 _, _, tb = sys.exc_info()
                 print(f'Error Closing Valves: {type(e).__name__} on line {tb.tb_lineno}: {e}')
@@ -268,7 +333,34 @@ def shutdown(do_abort=True):
         unsafe = []
         
         # Close peripherals
-        write_actuation(peripherals['Valhala_I'].elements['flight_phase'].key, -1, "auto", do_print=False)
+        write_actuation(peripherals['Valhala_I'].elements['flight_phase'].key, 'shutdown', "auto", do_print=False)
+        
+        for peripheral in peripherals.values():
+            if peripheral.manufacturer == 'VSS':
+                try: 
+                    pass
+                except Exception as e:
+                    _, _, tb = sys.exc_info()
+                    print(f'[Shutdown] Error: {peripheral.display_name}: {type(e).__name__} on line {tb.tb_lineno}: {e}')
+            
+            elif peripheral.manufacturer == 'NI':
+                closed_tasks = []
+                for module in peripheral.ni_modules.values(): # Closes all the NI tasks
+                    try:
+                        module.task.close()
+                        closed_tasks.append(f'{module.name} ({module.module_number})')
+                    except Exception as e:
+                        _, _, tb = sys.exc_info()
+                        print(f'[Shutdown] Error: {peripheral.display_name} NI Task for module {module.name} ({module.module_number}): {type(e).__name__} on line {tb.tb_lineno}: {e}')
+                print(f'[Shutdown] Closed NI tasks for {combine_with_and(closed_tasks)}')
+                
+            elif peripheral.manufacturer == 'LabJack':
+                try: # closes the labjack handle
+                    ljm.close(peripheral.handle)
+                except Exception as e:
+                    _, _, tb = sys.exc_info()
+                    print(f'[Shutdown] Error: {peripheral.display_name} LabJack did not close properly: {type(e).__name__} on line {tb.tb_lineno}: {e}')
+                    
         
         for name, server in servers: # stops all running threads (runs after closing ni tasks because threads call ni tasks while running, would cause an error if reversed order)
             server.stop(delete_db=True)
@@ -284,7 +376,7 @@ def shutdown(do_abort=True):
                 safe = False
                 unsafe.append(name)
                 
-        if not save_csv: # Removes csv logs if that setting is set
+        if not keep_csv: # Removes csv logs if that setting is set
             print('[Shutdown] removing logs')
             for file in telemetry.csv_files:
                 try:
@@ -301,9 +393,9 @@ def shutdown(do_abort=True):
             
     if safe: print("\n\n[Shutdown] All systems stopped safely\n\n")
     else: print(f"\n\n[Shutdown] Threads or servers did not stop safely: {unsafe}\n\n")
-            
 
-def incoming_data_handler(init_event):
+
+def peripheral_handler_worker(init_event):
     try:
         if simulated_data:
             i = 0
@@ -311,61 +403,76 @@ def incoming_data_handler(init_event):
             str_list = ['a','b','c','d','e','f','g','h','i','j','k']
             
         init_event.set()
-        print(f"[DataHandler] started")
+        print(f"[PeripheralHandler] started")
         try:
             while not stop_event.is_set():
+                data = {}
                 if simulated_data:
-                    data = {}
+                    time.sleep(0.1)
+                    sample = {}
                     for key in all_keys:
                         element = get_element(data_tree, key)
-                        if element.element_type == 'Data_Stream':
-                            if element.unit == 'bool': data[key] = j
-                            elif element.unit == 'str': data[key] = str_list[math.floor(i/10)]
-                            else: data[key] = i
+                        if element.element_class == 'Data_Stream':
+                            if element.unit == 'bool': sample[key] = j
+                            elif element.unit == 'str': sample[key] = str_list[math.floor(i/10)]
+                            else: sample[key] = i
                     i = 0 if i == 100 else i + 1
                     j = not j if i == 100 else j
-                    utc = int(time.time() * 1000)
+                    ts = int(time.time() * 1000)
+                    data = {ts:sample}
                 else:
-                    pass
-                    # scale and offset
-                    
+                    for peripheral in peripherals.values():
+                        if peripheral.manufacturer == 'VSS':
+                            pass
+                        
+                        elif peripheral.manufacturer == 'NI':
+                            try:
+                                data = peripheral.data_queue.get(timeout=1.0)
+                            except Empty:
+                                continue
+                            
+                        elif peripheral.manufacturer == 'LabJack':
+                            ts_end = int(time.time() * 1000)
+                            ret = ljm.eStreamRead(peripheral.handle) # get data from labjack
+                            aData = ret[0]
+                            
+                            deinterleaved = np.array([aData[index::peripheral.numAddresses] for index in range(peripheral.numAddresses)]) # labjack returns a 1D arary, convert to 2d
+                            
+                            sensor_data = []
+                            for channel in peripheral.channels:
+                                chanNumAbs = peripheral.channels.index(channel)
+                                channelData = deinterleaved[chanNumAbs]
+                                sensor_data.append(channelData)
+                            sensor_data = np.array(sensor_data).T
+                            
+                            for i, sample in enumerate(sensor_data): # Number of data samples
+                                ts = ts_end - (len(sensor_data) - i) * (1/peripheral.pull_freq) * 1e9  # the timestamp we get is from the last data point so we need to calculate the timestamps backwards from this
+                                data[ts] = {}
+                                for j, channel in enumerate(peripheral.channels): # Number of channels
+                                    data[ts][channel.key] = sample[j] * channel.scale + channel.offset
+                                
+
                 #print(data)
-                
-                for stream_id, value in data.items():
-                    telemetry.send(utc, stream_id, value, data_tree, "peripheral")
-                    
-                    '''entry = data_tree.get(key)
-                    if entry is None:
-                        print(f"[MIDGARD WARNING] Unrecognized telemetry key '{key}'")
-                        continue
-                    peripheral, stream_id = entry
-                    peripheral.update_data(stream_id, value)   # sets .value, checks in_range(), alerts
-                    telemetry.send(key, value)'''
-                    
-                    
-                    '''
-                ds = self.Data Streams.get(stream_id)
-                if ds is None:
-                    print(f"[MIDGARD WARNING] Unknown data stream '{stream_id}'")
-                    return
-                ds.value = value
-                #if not ds.in_range():
-                    #print(f"[MIDGARD ALERT] {stream_id} = {value} {ds.unit} out of range {ds.range}")'''
-                
-                time.sleep(0.1)
+                max_utc = max(data)
+                for utc, sample in sorted(data.items()):
+                    for stream_key, value in sample.items():
+                        if utc == max_utc:
+                            telemetry.send(utc, stream_key, value, data_tree, "peripheral")
+                        else:
+                            telemetry.send(utc, stream_key, value, data_tree, "peripheral", push_to_gui=False)
                 
         except Exception as e:
             _, _, tb = sys.exc_info()
-            print(f"[DataHandler] Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
+            print(f"[PeripheralHandler] Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
                 
     except Exception as e:
         if not stop_event.is_set():
             _, _, tb = sys.exc_info()
-            print(f"[DataHandler] Setup Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print(f"[PeripheralHandler] Setup Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
     finally: 
-        print(f"[DataHandler] stopped")
+        print(f"[PeripheralHandler] stopped")
         
-def incoming_command_handler(init_event):
+def gui_handler_worker(init_event):
     # Handles all user inputs from GUI
     try: 
         pressed_keys=[]
@@ -381,11 +488,11 @@ def incoming_command_handler(init_event):
                 for key in all_keys: # Populate default values
                     element = get_element(data_tree, key)
                     default = getattr(element, 'default', None)
-                    if default is not None and element.control_type != "trigger":
+                    if default is not None:
                         write_actuation(key, default, "auto", do_print=False)
         
                 init_event.set()
-                print(f"[CommandHandler] started")
+                print(f"[GUIHandler] started")
                 while not stop_event.is_set():
                     try:
                         cmd = telemetry.command_queue.get(timeout=0.1)
@@ -398,7 +505,7 @@ def incoming_command_handler(init_event):
         
                     element = get_element(data_tree, key)
                     if element is None:
-                        print(f"[CommandHandler] Unknown GUI Key Error: '{key}'")
+                        print(f"[GUIHandler] Unknown GUI Key Error: '{key}'")
                         continue
                     
                     missing_keys = [k for k in confirmation_keys if k not in pressed_keys]
@@ -408,7 +515,7 @@ def incoming_command_handler(init_event):
         except Exception as e:
             if not stop_event.is_set():
                 _, _, tb = sys.exc_info()
-                print(f"[CommandHandler] Initial Write Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+                print(f"[GUIHandler] Initial Write Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
         finally: # write nominal states for all switches
             for key in all_keys: # Populate default values
                 element = get_element(data_tree, key)
@@ -423,9 +530,9 @@ def incoming_command_handler(init_event):
                 if not non_abort_shutdown.is_set():
                     non_abort_shutdown.set()
             else:'''
-            print(f"[CommandHandler] Setup error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print(f"[GUIHandler] Setup error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
     finally: 
-        print(f"[CommandHandler] stopped")
+        print(f"[GUIHandler] stopped")
 
 
 def main():
@@ -439,22 +546,22 @@ def main():
         servers.append(("TelemetryServer", telemetry))
         
         # Create Threads
-        data_init_event = threading.Event()
-        data_handler = threading.Thread(target=incoming_data_handler, name="DataHandler", args=(data_init_event,))
-        data_handler.daemon = True
-        data_handler.start()
-        threads.append(("DataHandler", data_handler))
+        peripheral_init_event = threading.Event()
+        peripheral_handler = threading.Thread(target=peripheral_handler_worker, name="PeripheralHandler", args=(peripheral_init_event,))
+        peripheral_handler.daemon = True
+        peripheral_handler.start()
+        threads.append(("PeripheralHandler", peripheral_handler))
         
-        command_init_event = threading.Event()
-        command_handler = threading.Thread(target=incoming_command_handler, name="CommandHandler", args=(command_init_event,))
-        command_handler.daemon = True
-        command_handler.start()
-        threads.append(("CommandHandler", command_handler))
+        gui_init_event = threading.Event()
+        gui_handler = threading.Thread(target=gui_handler_worker, name="GUIHandler", args=(gui_init_event,))
+        gui_handler.daemon = True
+        gui_handler.start()
+        threads.append(("GUIHandler", gui_handler))
         
-        while not (data_init_event.is_set() and command_init_event.is_set()): # wait for all threads to initialize 
+        while not (peripheral_init_event.is_set() and gui_init_event.is_set()): # wait for all threads to initialize 
             time.sleep(.1)
         
-        write_actuation(peripherals['Valhala_I'].elements['flight_phase'].key, 1, "auto", do_print=False)
+        write_actuation(peripherals['Valhala_I'].elements['flight_phase'].key, 'pad', "auto", do_print=False) ##### TEMP!!! #####
         
         print("\n\nPress Ctrl+C to stop...\n\n")
         interval = 5 # Check every x seconds
@@ -501,27 +608,29 @@ if __name__ == '__main__':
 
 '''
 COMPLETED:
-    Selector
-    Make units optional
-    Shutdown sequence (Abort and peripheral close)
-    Logging data and commands (link all actuators with id logging)
-    Global abort (link all actuators with id abort)
+    Remove an item from a parent id file (ie remove id+pyro_motor from ASGARD_V0.2.toml)
+    NI
+    LabJack
     
 
 TO DO
+    Bugs
+
     Configuration
         Check configurations are valid
-        Remove an item from a parent id file (ie remove id+pyro_motor from ASGARD_V0.2.toml)
-        Sequence handling
-        Parent from other manufacturer
+            Warnings for certain config variables like debug_mode and keep_csv
+            No duplicate ids of the same element class
+            Check that peripheral ids are valid
+            Check no duplicates in id arrays in toml files in _resolve_inheritance
+            Check that no peripherals in python are using the same external device 
+        Parent file from other manufacturer
     Overseer
-        Error handling
-        Event handling 
         Restart of MIDGARD or peripheral handling
         Peripheral communication
             Abort and shutdown peripheral logic
         Install OpenMCT on first run (build_openmct.sh but thru python instead of bash)
     GUI
+        Add cluster control_type
         Add inhibited view state
         Terminal Display
         Features
@@ -533,16 +642,16 @@ TO DO
         Import csv logs into database
     Actuator Control
         Actuating
-        Sequences (sequences prevet the user from using the actuators the sequence use while active)
-        Triggers (sequences prevet the user from using the actuators the sequence use while active)
     Writing
         Readme
         How to
         Flight procedure
         Open Source License
-    Other Peripherals
+    Testing
         NI
         LabJack
+    Other Peripherals
+        MAVLink
         KSP (KSP OpenMCT and Telemachus Reborn https://gitlab.com/overloader-ksp/kerbal-telemetry)
         Ansys STK
         Basilisk (BSK)

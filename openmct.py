@@ -3,8 +3,17 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from queue import Queue
+import numpy as np
 
-from utility import get_element, combine_with_and
+from utility import get_element, combine_with_and, label
+
+import nidaqmx
+from nidaqmx import stream_readers, DaqReadError
+from nidaqmx.stream_writers import DigitalSingleChannelWriter, DigitalMultiChannelWriter
+from nidaqmx.constants import TerminalConfiguration, AcquisitionType, LineGrouping, WAIT_INFINITELY
+import nidaqmx.system
+from labjack import ljm
+import Basilisk
 
 
 def _safe_key(*parts):
@@ -16,34 +25,18 @@ def buildOpenMCTjs(peripherals, output_path=None):
         os.path.dirname(__file__), "openmct_midgard", "telemetry-tree.js"
     )
 
-    type_lookup = {
-        'radio': 'Radio', 'servo': 'Servo', 'fin': 'Fin', 'tvc': 'TVC', 'pyro': 'Pyro',
-        'position': 'Position', 'velocity': 'Velocity', 'acceleration': 'Acceleration',
-        'attitude': 'Attitude', 'heading': 'Heading', 'pressure': 'Pressure', 'gps': 'GPS',
-    }
-
-    def label(raw):
-        return type_lookup.get(raw, raw.replace('_', ' ').title())
-
     data_tree = {}
     all_keys = []
     peripheral_folders = []
 
     for peripheral_name, peripheral in peripherals.items():
         data_tree[peripheral_name] = {}
-        element_folders = []
+        element_class_folders = []
 
-        element_lookup = {
-            #'Interfaces': peripheral.interfaces,
-            'States': peripheral.states,
-            'Actuators': peripheral.actuators,
-            'Data_Streams': peripheral.data_streams,
-        }
-
-        for element_class, element_dict in element_lookup.items():
+        for element_class, element_dict in peripheral.element_lookup.items():
             if not element_dict:
                 continue
-            elif element_class in ['Interfaces']:
+            elif element_class in ['Interface', 'NI_Module']:
                 continue
 
             data_tree[peripheral_name][element_class] = {}
@@ -68,7 +61,7 @@ def buildOpenMCTjs(peripherals, output_path=None):
 
                 elif control_type in ('switch', 'selector'):
                     if control_type == 'switch':
-                        enumerations = [{'value': 0, 'string': 'False'}, {'value': 1, 'string': 'True'}]
+                        enumerations = [{'value': 0, 'string': element.nominal_state}, {'value': 1, 'string': element.off_nominal_state}]
                     else:
                         enumerations = [{'value': i, 'string': str(s)} for i, s in enumerate(element.states)]
 
@@ -87,7 +80,7 @@ def buildOpenMCTjs(peripherals, output_path=None):
                     if switch_display:
                         leaf["switch_display"] = switch_display
 
-                elif element_class == 'Data_Streams':
+                elif element_class == 'Data_Stream':
                     # DataStream, or an Actuator with no control_type (servo)
                     unit = getattr(element, 'unit', None)
                     if unit == 'bool':
@@ -110,44 +103,44 @@ def buildOpenMCTjs(peripherals, output_path=None):
                 else:
                     bucket["leaves"].extend(leaves)
 
-            element_children = []
+            element_folders = []
             for element_type, bucket in type_buckets.items():
                 if element_type is None:
-                    # no type at all — sits directly in the element-type folder
-                    element_children.extend(bucket["leaves"])
+                    # no type at all — sits directly in the element_class folder
+                    element_folders.extend(bucket["leaves"])
                     for subtype_name, sub_leaves in bucket["subtypes"].items():
-                        element_children.append({
+                        element_folders.append({
                             "name": label(subtype_name),
                             "key": _safe_key(peripheral_name, element_class, "untyped", subtype_name),
                             "children": sub_leaves,
                         })
                     continue
 
-                type_folder_children = list(bucket["leaves"])
+                type_folders = list(bucket["leaves"])
                 for subtype_name, sub_leaves in bucket["subtypes"].items():
-                    type_folder_children.append({
+                    type_folders.append({
                         "name": label(subtype_name),
                         "key": _safe_key(peripheral_name, element_class, element_type, subtype_name),
                         "children": sub_leaves,
                     })
 
-                element_children.append({
+                element_folders.append({
                     "name": label(element_type),
                     "key": _safe_key(peripheral_name, element_class, element_type),
-                    "children": type_folder_children,
+                    "children": type_folders,
                 })
 
-            if element_children:
-                element_folders.append({
+            if element_folders:
+                element_class_folders.append({
                     "name": element_class,
                     "key": _safe_key(peripheral_name, element_class),
-                    "children": element_children,
+                    "children": element_folders,
                 })
 
         peripheral_folders.append({
             "name": peripheral.display_name,
             "key": _safe_key(peripheral_name),
-            "children": element_folders,
+            "children": element_class_folders,
         })
 
     tree = {"name": "MIDGARD", "key": "midgard_root", "children": peripheral_folders}
@@ -167,6 +160,10 @@ class OpenMCTServer:
         openmct_dir=os.path.join(os.path.dirname(__file__), "openmct"),
         static_dir=os.path.join(os.path.dirname(__file__), "openmct_midgard"),
     ):
+        if openmct_dir == '':
+            openmct_dir = os.path.join(os.path.dirname(__file__), "openmct")
+        ### check if openmct installed at openmct_dir and install if not
+        
         self.port = port
         self.show_logs = show_logs
         self.dist_dir = os.path.join(openmct_dir, "dist")
@@ -197,6 +194,7 @@ class OpenMCTServer:
         if self.is_running:
             print("[OpenMCTServer] is already running.")
             return
+                            
 
         config = uvicorn.Config(
             self.app,
@@ -239,7 +237,7 @@ class OpenMCTServer:
 
     
 class TelemetryServer:
-    def __init__(self, stop_event, log_data=True, log_actuations=True, log_output_dir=None, port=4001, db_path=None, show_logs=False, buffer_interval=0.2):
+    def __init__(self, stop_event, log_data=True, log_actuations=True, log_output_dir=None, port=4001, db_path=None, show_logs=False, buffer_interval=0.3):
         self.stop_event = stop_event
         self.logging = False
         self.log_data = log_data
@@ -426,9 +424,6 @@ class TelemetryServer:
                     self.csv_file.close()
                     self._csv_file = None
                 
-            else:
-                print('[Logging] already stopped')
-                
         except Exception as e:
             _, _, tb = sys.exc_info()
             print(f"[Logging] Stop Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
@@ -463,7 +458,7 @@ class TelemetryServer:
                     else:
                         self.csv_writer.writerow((utc, key, value, source))
                         
-            if element.element_type in ['State', 'Actuator']: # Write preactuation state to show actuation on a graph as a step instead of a long slope
+            if element.element_class in ['State', 'Actuator']: # Write preactuation state to show actuation on a graph as a step instead of a long slope
                 _push(utc, key, element.value, source, False)
                 
             element.value = value

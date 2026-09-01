@@ -23,7 +23,7 @@ description = "Arms Pyro Channels"
 type = "lockout"
 default = false
 armed_by = ["lockout.main_lock"] # all must be true
-disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"] # all must be false
+disarmed_by = ["abort.abort", "phase.startup", "phase.pad", "phase.landed"] # all must be false
 debug_only = true
 
 [[actuator]]
@@ -33,7 +33,7 @@ description = "Arms Servos"
 type = "lockout"
 default = false
 armed_by = ["lockout.main_lock"] # all must be true
-disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"] # all must be false
+disarmed_by = ["abort.abort", "phase.startup", "phase.landed"] # all must be false
 
 [[actuator]]
 id = "launch_arm"
@@ -42,7 +42,7 @@ description = "Arms For Launch"
 type = "lockout"
 default = false
 armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.servo_arm"] # all must be true
-disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"] # all must be false
+disarmed_by = ["abort.abort", "phase.startup", "phase.pad", "phase.landed"] # all must be false
 
 # ── TRIGGERS ───────────────────────────────────────────────────────────
 [[actuator]]
@@ -50,9 +50,22 @@ id = "blink_led"
 name = "Blink LED"
 description = "Blinks the onboard debug LED"
 type = "trigger"
-trigger = ""
+module = "blink_led"
+function = "run"
 armed_by = [] # all must be true
-disarmed_by = ["phase.startup"] # all must be false
+disarmed_by = ["abort.abort", "phase.startup"] # all must be false
+sources = ["user"]
+
+# ── SEQUENCES ───────────────────────────────────────────────────────────
+[[actuator]]
+id = "test_sequence"
+name = "Test Sequence"
+description = "Runs the test sequence"
+type = "sequence"
+module = "test_sequence"
+function = "run"
+armed_by = ["lockout.main_lock"] # all must be true
+disarmed_by = ["abort.abort", "phase.startup"] # all must be false
 sources = ["user"]
 
 # ── SERVOS ─────────────────────────────────────────────────────────────
@@ -65,11 +78,11 @@ subtype = "fin"
 pin = 9
 unit = "deg"
 range = [-30.0, 30.0]
-default_position = 0.0
-nominal_position = 0.0
+default = 0.0
+nominal = 0.0
 slew_rate_max = 120.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
-disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
+disarmed_by = ["abort.abort", "phase.startup", "phase.landed"]
 
 [[actuator]]
 id = "fin_servo_neg_x"
@@ -80,11 +93,11 @@ subtype = "fin"
 pin = 6
 unit = "deg"
 range = [-30.0, 30.0]
-default_position = 0.0
-nominal_position = 0.0
+default = 0.0
+nominal = 0.0
 slew_rate_max = 120.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
-disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
+disarmed_by = ["abort.abort", "phase.startup", "phase.landed"]
 
 [[actuator]]
 id = "fin_servo_pos_y"
@@ -95,11 +108,11 @@ subtype = "fin"
 pin = 5
 unit = "deg"
 range = [-30.0, 30.0]
-default_position = 0.0
-nominal_position = 0.0
+default = 0.0
+nominal = 0.0
 slew_rate_max = 120.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
-disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
+disarmed_by = ["abort.abort", "phase.startup", "phase.landed"]
 
 [[actuator]]
 id = "fin_servo_neg_y"
@@ -110,11 +123,11 @@ subtype = "fin"
 pin = 4
 unit = "deg"
 range = [-30.0, 30.0]
-default_position = 0.0
-nominal_position = 0.0
+default = 0.0
+nominal = 0.0
 slew_rate_max = 120.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
-disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
+disarmed_by = ["abort.abort", "phase.startup", "phase.landed"]
 
 [[actuator]]
 id = "tvc_servo_x"
@@ -125,11 +138,11 @@ subtype = "tvc"
 pin = 3
 unit = "deg"
 range = [-8.0, 8.0]
-default_position = 0.0
-nominal_position = 0.0
+default = 0.0
+nominal = 0.0
 slew_rate_max = 60.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
-disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
+disarmed_by = ["abort.abort", "phase.startup", "phase.landed"]
 
 [[actuator]]
 id = "tvc_servo_y"
@@ -140,11 +153,11 @@ subtype = "tvc"
 pin = 2
 unit = "deg"
 range = [-8.0, 8.0]
-default_position = 0.0
-nominal_position = 0.0
+default = 0.0
+nominal = 0.0
 slew_rate_max = 60.0
 armed_by = ["lockout.main_lock", "lockout.servo_arm"]
-disarmed_by = ["lockout.abort", "phase.startup", "phase.landed"]
+disarmed_by = ["abort.abort", "phase.startup", "phase.landed"]
 
 # ── PYROS ──────────────────────────────────────────────────────────────
 [[actuator]]
@@ -157,8 +170,10 @@ channel_a = 14
 channel_b = 21
 unit = "bool"
 armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.launch_arm"]
-disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"]
+disarmed_by = ["abort.abort", "phase.startup", "phase.pad", "phase.landed"]
+sources = ["peripheral"]
 debug_only = true
+debug_sources = ["auto", "user", "peripheral"]
 
 [[actuator]]
 id = "pyro_main"
@@ -170,8 +185,10 @@ channel_a = 15
 channel_b = 22
 unit = "bool"
 armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.launch_arm"]
-disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"]
+disarmed_by = ["abort.abort", "phase.startup", "phase.pad", "phase.landed"]
+sources = ["peripheral"]
 debug_only = true
+debug_sources = ["auto", "user", "peripheral"]
 
 [[actuator]]
 id = "pyro_motor"
@@ -183,8 +200,10 @@ channel_a = 20
 channel_b = 23
 unit = "bool"
 armed_by = ["lockout.main_lock", "lockout.pyro_arm", "lockout.launch_arm"]
-disarmed_by = ["lockout.abort", "phase.startup", "phase.pad", "phase.landed"]
+disarmed_by = ["abort.abort", "phase.startup", "phase.pad", "phase.landed"]
+sources = ["peripheral"]
 debug_only = true
+debug_sources = ["auto", "user", "peripheral"]
 
 # ── POSITION ───────────────────────────────────────────────────────────
 [[data_stream]]

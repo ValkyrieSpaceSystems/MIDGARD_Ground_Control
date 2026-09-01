@@ -23,3 +23,6 @@ def combine_with_and(items, oxford_comma=True):
     *head, last = items
     sep = "," if oxford_comma else ""
     return f"{', '.join(head)}{sep} and {last}"
+    
+def label(raw):
+    return raw.replace('_', ' ').title()

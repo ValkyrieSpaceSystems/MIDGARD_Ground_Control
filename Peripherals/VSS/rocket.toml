@@ -14,7 +14,8 @@ valueAlign = "center"
 id = "abort"
 name = "Abort"
 description = "Emergency shutdown"
-type = "lockout"
+type = "abort"
+sync_group = "abort"
 default = false
 
 [actuator.switch_display]
@@ -35,6 +36,8 @@ id = "logging"
 name = "Logging"
 description = "Log commands and data to csv file"
 type = "logging"
+sync_group = "logging"
+default = false
 
 # ── Phases ─────────────────────────────────────────────────────────────
 [[actuator]]
