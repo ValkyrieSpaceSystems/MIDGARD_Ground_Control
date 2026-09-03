@@ -134,12 +134,34 @@ var TELEMETRY_TREE = {
                             ]
                         },
                         {
-                            "name": "Logging",
-                            "key": "Valhala_I.Actuator.logging",
+                            "name": "Switch",
+                            "key": "Valhala_I.Actuator.switch",
                             "children": [
                                 {
                                     "name": "Logging",
                                     "key": "Valhala_I.Actuator.logging",
+                                    "measurement": {
+                                        "format": "enum",
+                                        "enumerations": [
+                                            {
+                                                "value": 0,
+                                                "string": "Off"
+                                            },
+                                            {
+                                                "value": 1,
+                                                "string": "On"
+                                            }
+                                        ]
+                                    },
+                                    "switch_display": {
+                                        "namePosition": "top",
+                                        "nameAlign": "center",
+                                        "valueAlign": "center"
+                                    }
+                                },
+                                {
+                                    "name": "Test Sequence",
+                                    "key": "Valhala_I.Actuator.test_sequence",
                                     "measurement": {
                                         "format": "enum",
                                         "enumerations": [
@@ -214,41 +236,13 @@ var TELEMETRY_TREE = {
                             ]
                         },
                         {
-                            "name": "Trigger",
-                            "key": "Valhala_I.Actuator.trigger",
+                            "name": "Button",
+                            "key": "Valhala_I.Actuator.button",
                             "children": [
                                 {
                                     "name": "Blink LED",
                                     "key": "Valhala_I.Actuator.blink_led",
                                     "trigger": true
-                                }
-                            ]
-                        },
-                        {
-                            "name": "Sequence",
-                            "key": "Valhala_I.Actuator.sequence",
-                            "children": [
-                                {
-                                    "name": "Test Sequence",
-                                    "key": "Valhala_I.Actuator.test_sequence",
-                                    "measurement": {
-                                        "format": "enum",
-                                        "enumerations": [
-                                            {
-                                                "value": 0,
-                                                "string": "Stopped"
-                                            },
-                                            {
-                                                "value": 1,
-                                                "string": "Running"
-                                            }
-                                        ]
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
-                                    }
                                 }
                             ]
                         },

@@ -49,21 +49,23 @@ disarmed_by = ["abort.abort", "phase.startup", "phase.pad", "phase.landed"] # al
 id = "blink_led"
 name = "Blink LED"
 description = "Blinks the onboard debug LED"
-type = "trigger"
-module = "blink_led"
+type = "button"
+file = "blink_led"
 function = "run"
+function_type = "sequence"
 armed_by = [] # all must be true
 disarmed_by = ["abort.abort", "phase.startup"] # all must be false
 sources = ["user"]
 
-# ── SEQUENCES ───────────────────────────────────────────────────────────
+# ── THREADS ───────────────────────────────────────────────────────────
 [[actuator]]
 id = "test_sequence"
 name = "Test Sequence"
-description = "Runs the test sequence"
-type = "sequence"
-module = "test_sequence"
+description = "Runs the test thread"
+type = "switch"
+file = "test_thread"
 function = "run"
+function_type = "thread"
 armed_by = ["lockout.main_lock"] # all must be true
 disarmed_by = ["abort.abort", "phase.startup"] # all must be false
 sources = ["user"]

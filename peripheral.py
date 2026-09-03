@@ -1,24 +1,11 @@
-"""
-peripheral.py — MIDGARD peripheral config loader
-
-File structure:
-    Peripherals/
-        <manufacturer>/
-            <id>.toml           ← e.g. VSS/ASGARD_V0.2.toml
-            rocket.toml         ← shared parent configs live here too
-
-Usage:
-    peripherals = {
-        'rocket': {'interface': 'elrs', 'manufacturer': 'VSS', 'id': 'ASGARD_V0.2'},
-    }
-    for name, args in peripherals.items():
-        peripherals[name] = peripheral(name, args)
-"""
-
-import os, tomllib, threading, importlib.util, sys, time
-from utility import get_element, combine_with_and, label
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn
 import numpy as np
 from queue import Queue, Empty, Full
+from datetime import datetime, UTC
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 import nidaqmx
 from nidaqmx import stream_readers, DaqReadError
@@ -27,6 +14,8 @@ from nidaqmx.constants import TerminalConfiguration, AcquisitionType, LineGroupi
 import nidaqmx.system
 from labjack import ljm
 import Basilisk
+
+from midgard_functions import get_element, combine_with_and, label, check_configs, write_actuation, abort, unabort, shutdown
 
 
 PERIPHERALS_ROOT = os.path.join(os.path.dirname(__file__), "Peripherals")
@@ -120,14 +109,14 @@ def _load_element_function(manufacturer: str, module_name: str, function_name: s
     return func
 
 
-# ── element classes ──────────────────────────────────────────────────────────
+# ── Element Classes ──────────────────────────────────────────────────────────
 
 
 class Interface:
     def __init__(self, entry: dict):
         self.element_class: str   = "Interface"
         self.id: str              = entry["id"]
-        self.name: str            = entry.get("name", self.id)
+        self.name: str            = entry.get("name", label(self.id))
         self.description: str     = entry.get("description", "")
         self.type: str            = entry["type"]
         self.protocol: str | None = entry.get("protocol")
@@ -145,7 +134,7 @@ class State:
     def __init__(self, entry: dict):
         self.element_class: str     = "State"
         self.id: str                = entry["id"]
-        self.name: str              = entry.get("name", self.id)
+        self.name: str              = entry.get("name", label(self.id))
         self.description: str       = entry.get("description", "")
         self.type: str              = entry.get("type", "")
         self.parent: str            = entry.get("parent", "")
@@ -171,10 +160,13 @@ class Actuator:
         self.element_class: str        = "Actuator"
         self.parent                    = parent
         self.id: str                   = entry["id"]
-        self.name: str                 = entry.get("name", self.id)
+        self.name: str                 = entry.get("name", label(self.id))
         self.description: str          = entry.get("description", "")
         self.type: str                 = entry["type"]
         self.subtype: str | None       = entry.get("subtype", None)
+        self.file                      = entry.get("file", None) # file
+        self.function_name             = entry.get("function", None) # function in file, default function is run()
+        self.function_type             = entry.get("function_type", None) # trigger, sequence, thread
         self.module_num: int | None    = entry.get("module", None) 
         self.module                    = None
         self.writer                    = None
@@ -192,6 +184,11 @@ class Actuator:
         
         if parent.debug_mode:
             self.sources = list(dict.fromkeys(list(self.sources) + self.debug_sources))
+        if self.file and self.function_name:
+            self.func = _load_element_function(parent.manufacturer, self.file, self.function_name)
+            if self.function_type == 'thread':
+                self.thread = None
+                self.stop_event = threading.Event()
         
         if self.type == 'selector':
             self.control_type       = 'selector'
@@ -203,32 +200,24 @@ class Actuator:
             self.control_type      = 'switch'
             self.nominal_state     = 'Safe'
             self.off_nominal_state = 'Aborted'
-                
+            
         elif self.type == 'lockout': 
             self.control_type      = 'switch'
             self.nominal_state     = 'Disarmed'
             self.off_nominal_state = 'Armed'
                 
-        elif self.type == 'logging': 
+        elif self.type == 'switch': 
             self.control_type      = 'switch'
             self.nominal_state     = 'Off'
             self.off_nominal_state = 'On'
             
-        elif self.type == 'trigger':
+        elif self.type == 'button':
             self.control_type  = 'button'
-            self.module        = entry.get("module") # file
-            self.function_name = entry.get("function", "run") # function in file, default function is run()
-            self.func          = _load_element_function(parent.manufacturer, self.module, self.function_name) if self.module else None
             
-        elif self.type == 'sequence':
-            self.control_type  = 'switch'
+        elif self.type == 'thread':
+            self.control_type      = 'switch'
             self.nominal_state     = 'Stopped'
             self.off_nominal_state = 'Running'
-            self.module        = entry.get("module", None) # file
-            self.function_name = entry.get("function", "run") # function in file, default function is run()
-            self.func          = _load_element_function(parent.manufacturer, self.module, self.function_name) if self.module is not None else None
-            self.thread = None
-            self.stop_event = threading.Event()
             
         elif self.type == 'valve': 
             self.control_type  = 'switch'
@@ -266,6 +255,8 @@ class Actuator:
             print(f'[MIDGARD WARNING] Element {self.name} has unknown type {self.type}')
             
             
+        
+        
         if self.control_type == "switch":
             self.default: bool = entry.get("default", False)
             self.nominal: bool = False
@@ -326,12 +317,12 @@ class Actuator:
         self.value = self.default
         self.key = None
         
-                
+        
     def __repr__(self):
-        if not hasattr(self, 'unit'):
-            return f"Actuator({self.id!r}, type={self.type!r}, value={self.value})"
-        else:
+        if hasattr(self, 'unit'):
             return f"Actuator({self.id!r}, type={self.type!r}, value={self.value} {self.unit})"
+        else:
+            return f"Actuator({self.id!r}, type={self.type!r}, value={self.value})"
 
 
 class DataStream:
@@ -339,7 +330,7 @@ class DataStream:
         self.element_class: str           = "Data_Stream"
         self.parent                       = parent
         self.id: str                      = entry["id"]
-        self.name: str                    = entry.get("name", self.id)
+        self.name: str                    = entry.get("name", label(self.id))
         self.description: str             = entry.get("description", "")
         self.type: str                    = entry["type"]
         self.subtype: str | None          = entry.get("subtype", None)
@@ -374,14 +365,14 @@ class DataStream:
             return f"DataStream({self.id!r}, type={self.type!r}, value={self.value})"
         else:
             return f"DataStream({self.id!r}, type={self.type!r}, value={self.value} {self.unit})"
-        
-    
+
+
 class NIModule:
     def __init__(self, entry: dict, parent):
         self.element_class: str     = "NI_Module"
         self.parent                 = parent
         self.id: str                = entry["id"]
-        self.name: str              = entry.get("name", self.id)
+        self.name: str              = entry.get("name", label(self.id))
         self.description: str       = entry.get("description", "")
         self.type: int              = entry["type"] #9205, 9253, 9213, etc
         self.module_num: int | None = entry.get("module", None) # 0, 1, 2, etc
@@ -499,23 +490,27 @@ class NIModule:
         
     def callback(self, task_idx, event_type, num_samples, cb_data=None):
         '''generic_callback(num_samples, 'PT', pt_units, pt_reader, num_pt_chan, pt_scaling, pt_names)'''
-        ts_end = int(time.time() * 1000)
-        data = {}
-        buffer = np.zeros((len(self.channels), num_samples), dtype=np.float64)
-        self.reader.read_many_sample(buffer, num_samples, timeout=WAIT_INFINITELY)
-        sensor_data = buffer.T # convert from arrays for each sensor full of data points for each timestamp to arrays for each timestamp full of data points for each sensor
-        if len(sensor_data) == 0:
-            return 0
+        try:
+            ts_end = int(time.time() * 1000)
+            data = {}
+            buffer = np.zeros((len(self.channels), num_samples), dtype=np.float64)
+            self.reader.read_many_sample(buffer, num_samples, timeout=WAIT_INFINITELY)
+            sensor_data = buffer.T # convert from arrays for each sensor full of data points for each timestamp to arrays for each timestamp full of data points for each sensor
+            if len(sensor_data) == 0:
+                return 0
 
-        sensor_data = np.array(sensor_data).T
-                                    
-        for i, sample in enumerate(sensor_data): # Number of data samples
-            ts = ts_end - (len(sensor_data) - i) * (1/self.pull_freq) * 1e9  # the timestamp we get is from the last data point so we need to calculate the timestamps backwards from this
-            data[ts] = {}
-            for j, channel in enumerate(self.channels): # Number of channels
-                data[ts][channel.key] = sample[j] * channel.scale + channel.offset
-                
-        self.parent.data_queue.put_nowait(data)
+            sensor_data = np.array(sensor_data).T
+                                        
+            for i, sample in enumerate(sensor_data): # Number of data samples
+                ts = ts_end - (len(sensor_data) - i) * (1/self.pull_freq) * 1e9  # the timestamp we get is from the last data point so we need to calculate the timestamps backwards from this
+                data[ts] = {}
+                for j, channel in enumerate(self.channels): # Number of channels
+                    data[ts][channel.key] = sample[j] * channel.scale + channel.offset
+                    
+            self.parent.data_queue.put_nowait(data)
+        except Exception as e:
+            _, _, tb = sys.exc_info() 
+            print(f"[PeripheralHandler] Error: {self.parent.display_name} module {self.name} ({self.module_num}) Callback Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
 
 # ── Peripheral class ───────────────────────────────────────────────────────────
@@ -533,9 +528,8 @@ class Peripheral:
         raw  = _resolve_inheritance(self.manufacturer, self.id)
         meta = raw.get("meta", {})
         
-
         # ── Meta ───────────────────────────────────────────────────────
-        self.display_name: str     = meta.get("name", self.id)
+        self.display_name: str     = meta.get("name", label(self.id))
         self.description: str      = meta.get("description", "")
         self.type: str             = meta.get("type", "unknown")
         self.notes: str            = meta.get("notes", "")
@@ -644,8 +638,8 @@ class Peripheral:
             self.elements.pop(element.id)
             
         # ── Select active interface ────────────────────────────────────
-        self.active_interface: Interface | None = self.interfaces.get(self.interface_id)
-        if self.active_interface is None:
+        self.interface: Interface | None = self.interfaces.get(self.interface_id)
+        if self.interface is None:
             print(f"[MIDGARD WARNING] Interface '{self.interface_id}' not found in {self.id}")
 
         # ── Validate references ────────────────────────────────────────

@@ -27,6 +27,7 @@ id = "main_lock"
 name = "Main Lockout"
 description = "Disarms all other lockouts and actuators"
 type = "lockout"
+sync_group = "main_lock"
 default = false
 armed_by = [] # all must be true
 disarmed_by = ["lockout.abort"] # all must be false
@@ -35,7 +36,7 @@ disarmed_by = ["lockout.abort"] # all must be false
 id = "logging"
 name = "Logging"
 description = "Log commands and data to csv file"
-type = "logging"
+type = "switch"
 sync_group = "logging"
 default = false
 
@@ -45,6 +46,9 @@ id = "flight_phase"
 name = "Flight Phase"
 description = "Phase of flight selector/display"
 type = "selector"
+file = "test_thread"
+function = "run"
+function_type = "thread"
 default = "startup"
 nominal = "pad"
 
