@@ -1,6 +1,6 @@
 import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error
 import numpy as np
-from queue import Queue, Empty, Full
+from queue import PriorityQueue, Queue, Empty, Full
 from datetime import datetime, UTC
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -15,9 +15,56 @@ import nidaqmx.system
 from labjack import ljm
 import Basilisk
 
-
+class global_vars():
+    def __init__(self):
+        self.debug_mode: bool = False
+        self.show_server_logs: bool = False
+        self.simulated_data: bool = False
+        self.log_data: bool = True
+        self.log_actuations: bool = True
+        self.print_switch_changes: bool = True
+        self.keep_db: bool = True
+        self.keep_csv: bool = True
+        self.openmct_dir: str = ''
+        self.log_output_dir: str = ''
+        self.confirmation_keys: list[str] = []
+        self.openmct_port: int = 4000
+        self.telemetry_port: int = 4001
+        self.peripherals = {}
+        
+        self.threads = []
+        self.servers = []
+        self.stop_event = threading.Event()
+        self.abort_state = threading.Event()
+        self.non_abort_shutdown = threading.Event()
+        self.startup_event = threading.Event()
+        
+        self.sync_groups: dict[str, list] = {}
+        self.data_tree = {}
+        self.all_keys = []
+        
+        self.openmct = None
+        self.telemetry = None
+        
+gv = global_vars()
 
 # Helper Functions
+def print_out(msg):
+    try:
+        print(msg)
+        gv.telemetry.send(int(time.time() * 1000), 'terminal_log', msg, None, source="sequence")
+    except Exception as e:
+        _, _, tb = sys.exc_info()
+        error_out(type(e)(f"Print Out Error: {type(e).__name__} on line {tb.tb_lineno}: {e}"))
+
+def error_out(error):
+    try:
+        gv.telemetry.send(int(time.time() * 1000), 'terminal_log', error, None, source="sequence")
+    except Exception as e:
+        _, _, tb = sys.exc_info()
+        print_out(f"Error Out Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+    raise error
+
 def get_element(data_tree, key, default=None):
     current = data_tree
     for key_part in key.split('.'):
@@ -45,16 +92,16 @@ def combine_with_and(items, oxford_comma=True):
 def label(raw):
     return raw.replace('_', ' ').title()
 
-def run(command, cwd=None, check=True, shell=False):
+def run(command, cwd=None, check=True, shell=False): # CANNOT USE print_out
     """Run a command and stop if it fails."""
     print(f"\n> {' '.join(command)}")
     subprocess.run(command, cwd=cwd, check=check, shell=shell)
 
-def check_and_install_openmct(openmct_dir):
+def check_and_install_openmct(): # CANNOT USE print_out
     # Check if there is an OpenMCT directory
-    if os.path.isdir(openmct_dir):
+    if os.path.isdir(gv.openmct_dir):
         # Check if package.json exists
-        package_path = os.path.join(openmct_dir, "package.json")
+        package_path = os.path.join(gv.openmct_dir, "package.json")
         if not os.path.isfile(package_path):
             raise FileNotFoundError(f"OpenMCT Directory is not not complete: package.json does not exist: {package_path}")
 
@@ -91,32 +138,30 @@ def check_and_install_openmct(openmct_dir):
             if shutil.which("npm") is None:
                 raise RuntimeError("npm is not installed or is not available in PATH.")
             
-            print(f"[Install OpenMCT] OpenMCT directory not found. Installing OpenMCT at {str(openmct_dir)}")
+            print(f"[Install OpenMCT] OpenMCT directory not found. Installing OpenMCT at {str(gv.openmct_dir)}")
             
-            run(["git", "clone", "https://github.com/nasa/openmct.git", str(openmct_dir)])
-            run(["npm", "install"], cwd=openmct_dir)
-            run(["npm", "audit", "fix"], cwd=openmct_dir, check=False)
-            run(["npm", "run", "build"], cwd=openmct_dir)
+            run(["git", "clone", "https://github.com/nasa/openmct.git", str(gv.openmct_dir)])
+            run(["npm", "install"], cwd=gv.openmct_dir)
+            run(["npm", "audit", "fix"], cwd=gv.openmct_dir, check=False)
+            run(["npm", "run", "build"], cwd=gv.openmct_dir)
             
-            print(f"[Install OpenMCT] OpenMCT directory not found. OpenMCT installed at {str(openmct_dir)}")
+            print(f"[Install OpenMCT] OpenMCT directory not found. OpenMCT installed at {str(gv.openmct_dir)}")
             
         except Exception as e:
             _, _, tb = sys.exc_info()
-            shutil.rmtree(openmct_dir)
+            shutil.rmtree(gv.openmct_dir)
             print(f"[Install OpenMCT] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
 
 # Operating Functions
-def check_configs(global_vars):
+def check_configs():
     pass
 
-def write_actuation(global_vars, key, requested, source, missing_keys=None, do_print=True, bypass_checks=False):
-    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_db, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
-    
-    element = get_element(data_tree, key)
+def write_actuation(key, requested, source, missing_keys=None, do_print=True, bypass_checks=False):
+    element = get_element(gv.data_tree, key)
     
     try:
-        if not stop_event.is_set():
+        if not gv.stop_event.is_set():
             to_actuate = []
             
             if element.control_type == "switch":
@@ -162,20 +207,20 @@ def write_actuation(global_vars, key, requested, source, missing_keys=None, do_p
             # Sync Groups
             if element.sync_group == 'abort':
                 if value:
-                    abort(global_vars, 'Digital Abort')
+                    abort('Digital Abort')
                 elif not value:
-                    unabort(global_vars)
+                    unabort()
             
             elif element.sync_group == 'logging':
                 if value:
-                    telemetry.start_logging()
+                    gv.telemetry.start_logging()
                 elif not value:
-                    telemetry.stop_logging()
+                    gv.telemetry.stop_logging()
                 
             if element.sync_group:
-                for elem in sync_groups.get(element.sync_group, []):
+                for elem in gv.sync_groups.get(element.sync_group, []):
                     if elem is not element:
-                        telemetry.send(int(time.time() * 1000), elem.key, value, data_tree, source)
+                        gv.telemetry.send(int(time.time() * 1000), elem.key, value, element, source)
                         to_actuate.append(elem)
                     
                     
@@ -195,7 +240,7 @@ def write_actuation(global_vars, key, requested, source, missing_keys=None, do_p
                     
                     
             # Write to GUI
-            telemetry.send(int(time.time() * 1000), element.key, value, data_tree, source, inhibited=interlocked or not transition_allowed,immediate=True) # Need to update the element first so other elements can check the element's new value
+            gv.telemetry.send(int(time.time() * 1000), element.key, value, element, source, inhibited=interlocked or not transition_allowed,immediate=True) # Need to update the element first so other elements can check the element's new value
             to_actuate.append(element)
                 
             to_nominalize = []
@@ -207,71 +252,72 @@ def write_actuation(global_vars, key, requested, source, missing_keys=None, do_p
                         nominalize_array = nominalize_array + [elem for elem in e.arms if elem not in nominalize_array and elem.value == True and elem.control_type != 'button']
                     if nominalize_array == start: prop_complete = True 
                 
-                to_nominalize = [elem for elem in nominalize_array if elem.value == True and elem.element_class != 'State' and elem.control_type != 'button'] + [elem.parent for elem in nominalize_array if elem.element_class == 'State' and elem.parent]
+                to_nominalize = [elem for elem in nominalize_array if elem.value == True and elem.element_class != 'State' and elem.control_type != 'button'] + [elem.parent for elem in nominalize_array if elem.element_class == 'State' and elem.parent.value != elem.parent.nominal]
                 to_nominalize = list(dict.fromkeys(to_nominalize))
+                
                 for elem in nominalize_array: # Nominalize the elements
                     if elem.element_class == 'State': # Selector logic
                         par = elem.parent
                         if par.states_index[par.nominal] in par.states_index[par.value].transition_to: # Checks if transition is valid
-                            telemetry.send(int(time.time() * 1000), par.key, par.nominal, data_tree, source, immediate=True)
+                            gv.telemetry.send(int(time.time() * 1000), par.key, par.nominal, par, source, immediate=True)
                             
                             if hasattr(par, 'function_type'):
                                 if par.states_index[par.nominal] in par.function_states or par.function_states == []: # nominal state not inhibited
                                     if par.function_type == 'sequence' and par.run_on_nominalize: 
-                                        par.func(global_vars, par)
+                                        par.func(par)
                                     elif par.function_type == 'thread' and par.run_on_nominalize: 
                                         element.stop_event.clear()
                                         if element.thread == None:
-                                            element.thread = threading.Thread(target=element.func, args=(global_vars, element), daemon=True)
+                                            element.thread = threading.Thread(target=element.func, args=(element,), daemon=True)
                                             element.thread.start()
-                                            threads.append((element.name, element.thread))
+                                            gv.threads.append((element.name, element.thread))
                                 else: 
                                     if par.function_type == 'thread':
                                         par.stop_event.set()
                                         if par.thread != None:
                                             par.thread.join()
-                                            threads.remove((par.name, par.thread))
+                                            gv.threads.remove((par.name, par.thread))
                                             par.thread = None
                     else:
-                        telemetry.send(int(time.time() * 1000), elem.key, elem.nominal, data_tree, source, inhibited=True, immediate=True)
+                        gv.telemetry.send(int(time.time() * 1000), elem.key, elem.nominal, elem, source, inhibited=True, immediate=True)
                         if elem.control_type in ['switch']: # only switches should always change on nominalization (selector logic above)
                             to_actuate.append(elem)
                             if hasattr(elem, 'function_type'):
                                 if elem.function_type == 'sequence':
-                                    elem.func(global_vars, element)
+                                    elem.func(element)
                                 elif elem.function_type == 'thread':
                                     elem.stop_event.set()
                                     if elem.thread != None:
                                         elem.thread.join()
-                                        threads.remove((elem.name, elem.thread))
+                                        gv.threads.remove((elem.name, elem.thread))
                                         elem.thread = None
             
             if uninhibit_array: # Uninhibit the elements
                 for elem in uninhibit_array:
-                    if elem.element_class == "State":
-                        telemetry.send(int(time.time() * 1000), elem.parent.key, elem.parent.value, data_tree, source, immediate=True) # Just updating the selector because selector inhibit logic in telemetry.send
+                    if elem.element_class == "State":\
+                        gv.telemetry.send(int(time.time() * 1000), elem.parent.key, elem.parent.value, elem.parent, source, immediate=True) # Just updating the selector because selector inhibit logic in telemetry.send
                     else:
                         elem_interlocked = any(not bool(e.value) for e in elem.armed_by) or any(bool(e.value) for e in elem.disarmed_by)
-                        telemetry.send(int(time.time() * 1000), elem.key, elem.nominal, data_tree, source, inhibited=elem_interlocked, immediate=True)
-
+                        gv.telemetry.send(int(time.time() * 1000), elem.key, elem.nominal, elem, source, inhibited=elem_interlocked, immediate=True)
+            
             
             # Triggers and Sequences
             if hasattr(element, 'function_type'):
                 if (element.control_type == 'selector' and (element.states_index[value] in element.function_states or element.function_states == [])) or (element.control_type != 'selector' and value): # If selector with a valid state or no valid states (ie all states) or if not selector and value
                     if element.function_type == "sequence" and run_sequence: # regular sequences will run every actuation, sequence must check the element value
-                        element.func(global_vars, element)
+                        element.func(element)
                     elif element.function_type == 'thread':
                         element.stop_event.clear()
                         if element.thread == None:
-                            element.thread = threading.Thread(target=element.func, args=(global_vars, element), daemon=True)
+                            element.thread = threading.Thread(target=element.func, args=(element,), daemon=True)
                             element.thread.start()
-                            threads.append((element.name, element.thread))
+                            gv.threads.append((element.name, element.thread))
                 else:
                     if element.function_type == 'thread':
                         element.stop_event.set()
                         if element.thread != None:
                             element.thread.join()
-                            threads.remove((element.name, element.thread))
+                            gv.threads.remove((element.name, element.thread))
                             element.thread = None
             
             
@@ -299,7 +345,7 @@ def write_actuation(global_vars, key, requested, source, missing_keys=None, do_p
             # Printing
             if do_print: 
                 if to_nominalize:
-                    print(f'{element.name} now inhibiting and setting nominal {[elem.name for elem in to_nominalize]}')
+                    print_out(f'{element.name} now inhibiting and setting nominal {[elem.name for elem in to_nominalize]}')
                     
                 if source_authorized and transition_allowed and confirmation_keys_pressed:
                     if element.control_type == "switch":
@@ -323,13 +369,13 @@ def write_actuation(global_vars, key, requested, source, missing_keys=None, do_p
                         control_type_display = f"set to {display_value}"
                                             
                     if not interlocked:
-                        print(f"{element.name} {control_type_display}")
+                        print_out(f"{element.name} {control_type_display}")
                     elif interlocked:
                         if element.control_type == 'selector':
                             blocked = [elem.name for elem in requested_state.armed_by if elem.value == False] + [elem.name for elem in requested_state.disarmed_by if elem.value == True]  # A list of all inhbiiting elements
                         else:
                             blocked = [elem.name for elem in element.armed_by if elem.value == False] + [elem.name for elem in element.disarmed_by if elem.value == True]  # A list of all inhbiiting elements
-                        print(f"{element.name} {control_type_display}. Interlocked by {blocked}")
+                        print_out(f"{element.name} {control_type_display}. Interlocked by {blocked}")
                 
                 else: 
                     reasons = []
@@ -348,29 +394,27 @@ def write_actuation(global_vars, key, requested, source, missing_keys=None, do_p
                             reasons.append(f"{source} not valid source {requested_state.sources}")
                             
                         if not transition_allowed:
-                            reasons.append(f"{requested_state.name} not valid transition {[s.name for s in current_state.transition_to]}")
+                            reasons.append(f"{requested_state.name} not valid transition {[s.name for s in current_state.transition_to if s.name != current_state.name ]}")
                     else:
                         if not source_authorized:
                             reasons.append(f"{source} not valid source {element.sources}")
                         
-                    print(f"{element.name} command ignored because {combine_with_and(reasons)}")
+                    print_out(f"{element.name} command ignored because {combine_with_and(reasons)}")
 
                     
     except Exception as e:
         _, _, tb = sys.exc_info()
-        print(f"{element.name} Write Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+        print_out(f"{element.name} Write Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
-def abort(global_vars, cause='', verbose_cause=True, verbose_abort=True): # A digital abort exists, but cant be activated without an 'abort' switch (except during shutdown)
-    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_db, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
-    
-    if not abort_state.is_set():
+def abort(cause='', verbose_cause=True, verbose_abort=True): # A digital abort exists, but cant be activated without an 'abort' switch (except during shutdown)
+    if not gv.abort_state.is_set():
         try: 
-            abort_state.set() # sets first to stop anything else from writing and interfering with abort
+            gv.abort_state.set() # sets first to stop anything else from writing and interfering with abort
             
             ###
             # Peripheral Abort Logic
             ###
-            for peripheral in peripherals.values():
+            for peripheral in gv.peripherals.values():
                 if peripheral.manufacturer == 'NI':
                     for writer in peripheral.writers: # Iterates through all writers and sets all channels on each module to false
                         writer.write_one_sample_one_line(np.array([False]*8))
@@ -379,50 +423,46 @@ def abort(global_vars, cause='', verbose_cause=True, verbose_abort=True): # A di
                     ljm.eWriteNames(peripheral.handle, len(peripheral.labjack_actuators), [elem.channel for elem in peripheral.labjack_actuators], [0]*len(peripheral.labjack_actuators))
                     
             if verbose_abort: 
-                print("\nABORTING\nABORTING\nABORTING\n")
+                print_out("\nABORTING\nABORTING\nABORTING\n")
             if cause != '' and verbose_cause:
-                print(f'Abort: {cause}\n')
+                print_out(f'Abort: {cause}\n')
         except Exception as e:
             _, _, tb = sys.exc_info()
-            print(f"Abort Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"Abort Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
-def unabort(global_vars, verbose=True): 
-    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_db, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
-    
-    if abort_state.is_set():
+def unabort(verbose=True): 
+    if gv.abort_state.is_set():
         if verbose:
-            print("\nUnaborted\n")
-        abort_state.clear() # This just unsets the abort_state event
+            print_out("\nUnaborted\n")
+        gv.abort_state.clear() # This just unsets the abort_state event
 
-def shutdown(global_vars, do_abort=True):
-    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_db, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
-    
-    print("\n\n\nStopping MIDGARD...")
-    stop_event.set() # Runs this to stop everything else from running and to enable the shutdown process
+def shutdown(do_abort=True):
+    print_out("\n\n\nStopping MIDGARD...")
+    gv.stop_event.set() # Runs this to stop everything else from running and to enable the shutdown process
     try:
         if do_abort: # this is the propper shutdown
             try: # Ensure all relays are turned off on exit
-                abort(global_vars, 'Shut Down', False, False)
+                abort('Shut Down', False, False)
             except Exception as e:
                 _, _, tb = sys.exc_info()
-                print(f'Error Closing Valves: {type(e).__name__} on line {tb.tb_lineno}: {e}')
+                print_out(f'Error Closing Valves: {type(e).__name__} on line {tb.tb_lineno}: {e}')
             time.sleep(.1) # Short wait for NI, caused error when trying to close last ssr task without delay
         else:
-            abort_state.set() # This is for special error shutdowns such as the synna cluster stopping while this program is running
+            gv.abort_state.set() # This is for special error shutdowns such as the synna cluster stopping while this program is running
         
         safe = True
         unsafe = []
         
         # Close peripherals
-        write_actuation(global_vars, peripherals['Valhala_I'].elements['flight_phase'].key, 'shutdown', "auto", do_print=False)
+        write_actuation(gv.peripherals['Valhala_I'].elements['flight_phase'].key, 'shutdown', "auto", do_print=False)
         
-        for peripheral in peripherals.values():
+        for peripheral in gv.peripherals.values():
             if peripheral.manufacturer == 'VSS':
                 try: 
                     pass
                 except Exception as e:
                     _, _, tb = sys.exc_info()
-                    print(f'[Shutdown] Error: {peripheral.display_name}: {type(e).__name__} on line {tb.tb_lineno}: {e}')
+                    print_out(f'[Shutdown] Error: {peripheral.display_name}: {type(e).__name__} on line {tb.tb_lineno}: {e}')
             
             elif peripheral.manufacturer == 'NI':
                 closed_tasks = []
@@ -432,34 +472,34 @@ def shutdown(global_vars, do_abort=True):
                         closed_tasks.append(f'{module.name} ({module.module_number})')
                     except Exception as e:
                         _, _, tb = sys.exc_info()
-                        print(f'[Shutdown] Error: {peripheral.display_name} NI Task for module {module.name} ({module.module_number}): {type(e).__name__} on line {tb.tb_lineno}: {e}')
-                print(f'[Shutdown] Closed NI tasks for {combine_with_and(closed_tasks)}')
+                        print_out(f'[Shutdown] Error: {peripheral.display_name} NI Task for module {module.name} ({module.module_number}): {type(e).__name__} on line {tb.tb_lineno}: {e}')
+                print_out(f'[Shutdown] Closed NI tasks for {combine_with_and(closed_tasks)}')
                 
             elif peripheral.manufacturer == 'LabJack':
                 try: # closes the labjack handle
                     ljm.close(peripheral.handle)
                 except Exception as e:
                     _, _, tb = sys.exc_info()
-                    print(f'[Shutdown] Error: {peripheral.display_name} LabJack did not close properly: {type(e).__name__} on line {tb.tb_lineno}: {e}')
+                    print_out(f'[Shutdown] Error: {peripheral.display_name} LabJack did not close properly: {type(e).__name__} on line {tb.tb_lineno}: {e}')
                     
         
-        for name, server in servers: # stops all running threads (runs after closing ni tasks because threads call ni tasks while running, would cause an error if reversed order)
-            server.stop(delete_db=not keep_db)
+        for name, server in gv.servers: # stops all running threads (runs after closing ni tasks because threads call ni tasks while running, would cause an error if reversed order)
+            server.stop(delete_db=not gv.keep_db)
             if server.is_running:
                 print(f"[Shutdown] Warning: {name} server did not stop cleanly")
                 safe = False
                 unsafe.append(name)
                 
-        for name, thread in threads: # stops all running threads (runs after closing ni tasks because threads call ni tasks while running, would cause an error if reversed order)
+        for name, thread in gv.threads: # stops all running threads (runs after closing ni tasks because threads call ni tasks while running, would cause an error if reversed order)
             thread.join(timeout=5)
             if thread.is_alive():
                 print(f"[Shutdown] Warning: {name} server did not stop cleanly")
                 safe = False
                 unsafe.append(name)
                 
-        if not keep_csv: # Removes csv logs if that setting is set
+        if not gv.keep_csv: # Removes csv logs if that setting is set
             print('[Shutdown] removing logs')
-            for file in telemetry.csv_files:
+            for file in gv.telemetry.csv_files:
                 try:
                     os.remove(file)
                 except FileNotFoundError:

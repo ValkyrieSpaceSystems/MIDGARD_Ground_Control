@@ -100,7 +100,8 @@ function getValueMetadata(openmct, domainObject) {
 }
 
 function fetchHistory(key) {
-  var url = 'http://' + window.location.hostname + ':4001/history/' + key + '?start=0&end=' + Date.now();
+  var port = (typeof MIDGARD_TELEMETRY_PORT !== 'undefined') ? MIDGARD_TELEMETRY_PORT : 4001;
+  var url = 'http://' + window.location.hostname + ':' + port + '/history/' + key + '?start=0&end=' + Date.now();
   return fetch(url).then(function (r) { return r.json(); });
 }
 
@@ -113,7 +114,7 @@ function SwitchViewPlugin() {
       name: 'Switch',
       cssClass: 'icon-switch',
       canView: function (domainObject) {
-        if (domainObject.type !== 'midgard.telemetry') return false;
+        if (domainObject.type !== 'midgard.control') return false;
         var v = getValueMetadata(openmct, domainObject);
         return !!(v && v.format === 'enum' && v.enumerations && v.enumerations.length === 2);
       },
@@ -194,7 +195,7 @@ function SwitchViewPlugin() {
       name: 'Selector',
       cssClass: 'icon-dial',
       canView: function (domainObject) {
-        if (domainObject.type !== 'midgard.telemetry') return false;
+        if (domainObject.type !== 'midgard.control') return false;
         var v = getValueMetadata(openmct, domainObject);
         return !!(v && v.format === 'enum' && v.enumerations && v.enumerations.length > 2);
       },
@@ -345,5 +346,51 @@ function SwitchViewPlugin() {
       },
       priority: function () { return 1; }
     });
+    // ============ MESSAGE — scrolling log view for string-formatted telemetry ============
+		openmct.objectViews.addProvider({
+			key: 'midgard-terminal-view',
+			name: 'Message',
+			cssClass: 'icon-terminal',
+			canView: function (domainObject) {
+				if (domainObject.type !== 'midgard.telemetry') return false;
+				var v = getValueMetadata(openmct, domainObject);
+				return !!(v && v.format === 'string');
+			},
+			view: function (domainObject) {
+				var container, onMessage;
+
+				function appendLine(text, utc) {
+				  var line = document.createElement('div');
+				  var time = new Date(utc).toISOString().substr(11, 8);
+				  line.textContent = text;
+				  container.appendChild(line);
+				  container.scrollTop = container.scrollHeight;
+				}
+
+				return {
+				  show: function (element) {
+				    container = document.createElement('div');
+				    container.style.cssText =
+				      'height:100%; width:100%; overflow-y:auto; background:#41464c; color:#fff; ' +
+				      'font-family:monospace; font-size:13px; padding:8px; box-sizing:border-box; white-space:pre-wrap;';
+				    element.appendChild(container);
+
+				    fetchHistory(domainObject.identifier.key).then(function (points) {
+				      points.forEach(function (p) { appendLine(p.value, p.utc); });
+				    });
+
+				    onMessage = function (event) {
+				      var point = JSON.parse(event.data);
+				      if (point.key === domainObject.identifier.key) appendLine(point.value, point.utc);
+				    };
+				    midgardSocket.addEventListener('message', onMessage);
+				  },
+				  destroy: function () {
+				    if (onMessage) midgardSocket.removeEventListener('message', onMessage);
+				  }
+				};
+			},
+			priority: function () { return 1; }
+		});
   };
 }

@@ -32,6 +32,7 @@ default = false
 armed_by = [] # all must be true
 disarmed_by = ["lockout.abort"] # all must be false
 
+# ── Logging ────────────────────────────────────────────────────────────
 [[actuator]]
 id = "logging"
 name = "Logging"
@@ -39,6 +40,13 @@ description = "Log commands and data to csv file"
 type = "switch"
 sync_group = "logging"
 default = false
+
+# ── Terminal ───────────────────────────────────────────────────────────
+#[[actuator]]
+#id = "terminal_log"
+#name = "Terminal"
+#description = "Displays the python terminal in OpenMCT"
+#type = "message"
 
 # ── Phases ─────────────────────────────────────────────────────────────
 [[actuator]]

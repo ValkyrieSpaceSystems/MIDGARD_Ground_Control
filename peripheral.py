@@ -1,6 +1,6 @@
 import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error
 import numpy as np
-from queue import Queue, Empty, Full
+from queue import PriorityQueue, Queue, Empty, Full
 from datetime import datetime, UTC
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -15,7 +15,7 @@ import nidaqmx.system
 from labjack import ljm
 import Basilisk
 
-from midgard_functions import get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, write_actuation, abort, unabort, shutdown
+from midgard_functions import gv, print_out, error_out, get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, write_actuation, abort, unabort, shutdown
 
 
 PERIPHERALS_ROOT = os.path.join(os.path.dirname(__file__), "Peripherals")
@@ -175,6 +175,7 @@ class Actuator:
         self.description: str          = entry.get("description", "")
         self.type: str                 = entry["type"]
         self.subtype: str | None       = entry.get("subtype", None)
+        self.normally: str | None      = entry.get("normally", None)
         self.function_file             = entry.get("function_file", None) # file
         self.function_name             = entry.get("function", None) # function in file, default function is run()
         self.function_type             = entry.get("function_type", None) # trigger, sequence, thread
@@ -200,13 +201,26 @@ class Actuator:
             if self.function_type == 'thread':
                 self.thread = None
                 self.stop_event = threading.Event()
+                     
         
-        if self.type == 'selector':
+                
+        if self.type == 'button':
+            self.control_type  = 'button'
+                        
+        elif self.type == 'switch': 
+            self.control_type      = 'switch'
+            self.nominal_state     = 'Off'
+            self.off_nominal_state = 'On'
+            
+        elif self.type == 'selector':
             self.control_type       = 'selector'
             self.states: dict       = {}
             self.states_index: list = []
             self.states_name: list  = []
-                
+            
+        elif self.type == 'message': 
+            self.control_type = 'message'
+                    
         elif self.type == 'abort': 
             self.control_type      = 'switch'
             self.nominal_state     = 'Safe'
@@ -216,14 +230,6 @@ class Actuator:
             self.control_type      = 'switch'
             self.nominal_state     = 'Disarmed'
             self.off_nominal_state = 'Armed'
-                
-        elif self.type == 'switch': 
-            self.control_type      = 'switch'
-            self.nominal_state     = 'Off'
-            self.off_nominal_state = 'On'
-            
-        elif self.type == 'button':
-            self.control_type  = 'button'
             
         elif self.type == 'thread':
             self.control_type      = 'switch'
@@ -232,12 +238,12 @@ class Actuator:
             
         elif self.type == 'valve': 
             self.control_type  = 'switch'
-            if self.default == False:
-                self.nominal_state = 'Closed'
-                self.off_nominal_state = 'Open'
-            elif self.default == True:
+            if self.normally == 'Open':
                 self.nominal_state = 'Open'
                 self.off_nominal_state = 'Closed'
+            else:
+                self.nominal_state = 'Closed'
+                self.off_nominal_state = 'Open'
             
         elif self.type == 'servo': 
             self.control_type                = None
@@ -265,9 +271,7 @@ class Actuator:
         else:
             print(f'[MIDGARD WARNING] Element {self.name} has unknown type {self.type}')
             
-            
-        
-        
+                       
         if self.control_type == "switch":
             self.default: bool = entry.get("default", False)
             self.nominal: bool = False
@@ -278,9 +282,12 @@ class Actuator:
             self.default: str | int | None = entry.get("default", None)
             self.nominal: str | int | None = entry.get("nominal", self.default)
             self.run_on_nominalize: bool   = entry.get("run_on_nominalize", False)
+        elif self.control_type == "message":
+            self.default = ''
+            self.nominal = ''
         elif self.control_type == "cluster":
             self.default: list[bool] = [entry.get("default", False)] * self.cluster_quantity
-            self.default: list[bool] = [entry.get("nominal", entry.get("default", False))] * self.cluster_quantity
+            self.nominal: list[bool] = [entry.get("nominal", entry.get("default", False))] * self.cluster_quantity
         elif self.control_type == None:
             self.default: float | None = entry.get("default", None)
             self.nominal: float | None = entry.get("nominal", self.default)
@@ -288,6 +295,7 @@ class Actuator:
         if self.type == 'pyro': # Hard coded for safety
             self.default: bool = False
             self.nominal: bool = False
+            
         
         
         # ── Build selector-type actuators from sibling [[state]] entries ──────────
@@ -347,6 +355,7 @@ class DataStream:
         self.description: str             = entry.get("description", "")
         self.type: str                    = entry["type"]
         self.subtype: str | None          = entry.get("subtype", None)
+        self.priority: int                = entry.get("priority", 2) #0-4
         self.module_num: int | None       = entry.get("module", None) 
         self.module                       = None
         self.channel: int | str | None    = entry.get("channel", None) # 1, AIN0
@@ -513,14 +522,16 @@ class NIModule:
                 return 0
 
             sensor_data = np.array(sensor_data).T
-                                        
+            
+            max_priority = 0
             for i, sample in enumerate(sensor_data): # Number of data samples
                 ts = ts_end - (len(sensor_data) - i) * (1/self.pull_freq) * 1e9  # the timestamp we get is from the last data point so we need to calculate the timestamps backwards from this
                 data[ts] = {}
                 for j, channel in enumerate(self.channels): # Number of channels
                     data[ts][channel.key] = sample[j] * channel.scale + channel.offset
+                    max_priority = max(max_priority, channel.priority)
                     
-            self.parent.data_queue.put_nowait(data)
+            self.parent.data_queue.put((max_priority, data))
         except Exception as e:
             _, _, tb = sys.exc_info() 
             print(f"[PeripheralHandler] Error: {self.parent.display_name} module {self.name} ({self.module_num}) Callback Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
@@ -529,14 +540,14 @@ class NIModule:
 # ── Peripheral class ───────────────────────────────────────────────────────────
 
 class Peripheral:
-    def __init__(self, stop_event, debug_mode, name: str, args: dict):
-        self.stop_event = stop_event
-        self.debug_mode = debug_mode
+    def __init__(self, name: str, args: dict):
+        self.stop_event = gv.stop_event
+        self.debug_mode = gv.debug_mode
         self.name:         str = name
         self.interface_id: str = args["interface"]
         self.manufacturer: str = args["manufacturer"]
         self.id:           str = args["id"]
-        self.data_queue        = Queue(maxsize=10000)
+        self.data_queue        = PriorityQueue(maxsize=10000)
 
         raw  = _resolve_inheritance(self.manufacturer, self.id)
         meta = raw.get("meta", {})
@@ -636,7 +647,7 @@ class Peripheral:
         for element in self.elements.values():
             if element.remove == True:
                 reasons = []
-                if element.arms:
+                if hasattr(element, 'arms'):
                     reasons.append(f"it arms {[elem.name for elem in element.arms]}")
                 if hasattr(element, 'transition_to'):
                     for elem in element.transition_to:
@@ -657,19 +668,8 @@ class Peripheral:
         if self.interface is None:
             print(f"[MIDGARD WARNING] Interface '{self.interface_id}' not found in {self.id}")
 
-        # ── Validate references ────────────────────────────────────────
-        self._validate()
-
-    # ── NI ─────────────────────────────────────────────────────────────
-    def get_ssr_array(self):
-        for elem in self.actuators:
-            pass
-    
-    # ── Validation ─────────────────────────────────────────────────────
-
-    def _validate(self):
-        pass
-        # check that first phase is a valid phase
+        # ── Validate Config ────────────────────────────────────────────
+        #put validation code here
 
 
     def __repr__(self):

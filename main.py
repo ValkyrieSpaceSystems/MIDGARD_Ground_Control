@@ -1,6 +1,6 @@
 import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error
 import numpy as np
-from queue import Queue, Empty, Full
+from queue import PriorityQueue, Queue, Empty, Full
 from datetime import datetime, UTC
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -15,9 +15,9 @@ import nidaqmx.system
 from labjack import ljm
 import Basilisk
 
-from peripheral import Peripheral
+from peripheral import Peripheral, Actuator
 from openmct import OpenMCTServer, TelemetryServer, buildOpenMCTjs
-from midgard_functions import get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, write_actuation, abort, unabort, shutdown
+from midgard_functions import gv, print_out, error_out, get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, write_actuation, abort, unabort, shutdown
 
 
 '''
@@ -42,13 +42,13 @@ abort and logging actuators cannot have sources
 
 if id and type are the same, the type folder will collapse and become the element object. if id and type are the same, no other elements of that type will be supported for that peripheral
 
-cannot have duplicate ids of the same element class
+cannot have duplicate ids on the same peripheral
 
 currently, only switches can be tied to a physical actuator, but other control_types can call a function to actuate a switch for them. this can be expanded, but will require more control logic.
 
 if a peripheral calls an actuation, midgard will ignore the elements in to_actuate when commanding the physical actuations (digital actuation will still occur) and rely on the peripheral to make those actuations without midgard needing to instruct them. the operating procedure is to have a duplicate of all actuators on both the peripheral and midgard with the propper configuration so propogated actuations occur the same on both systems (idealy use the same config file) (ie if ASGARD calls for main_lockout set to false, ASGARD and MIDGARD set everything armed by main_lockout False independently, but MIDGARD also sets the other peripherals that rely on what this peripheral actuated)
 
-functions can be tied to any actuator, but buttons, switches, and selectors are recommended (at least for now). sequences just run code and threads will run the function as a thread. buttons will run a sequence every actuation (except when they become inhibited) and threads will be run forever (but cant have any armed or disarmed by and the thread must handle all safety logic) (BUTTON THREADS ARE NOT RECOMENDED!). Switches will run a sequence or thread if the value is true. Selectors will run the function if the state has do_function and will run always if no states have do_function (will run the function when nominalization occurs if nominalized state is not inhibited and do_on_nominalization is True)
+functions can be tied to any actuator, but buttons, switches, and selectors are recommended (at least for now). sequences just run code and gv.threads will run the function as a thread. buttons will run a sequence every actuation (except when they become inhibited) and gv.threads will be run forever (but cant have any armed or disarmed by and the thread must handle all safety logic) (BUTTON gv.threads ARE NOT RECOMENDED!). Switches will run a sequence or thread if the value is true. Selectors will run the function if the state has do_function and will run always if no states have do_function (will run the function when nominalization occurs if nominalized state is not inhibited and do_on_nominalization is True)
 
 put in readme: Read the manual. life and limb could be at stake if you fail to understand how midgard actually works
 
@@ -69,10 +69,14 @@ log_output_dir = '' # String of absolute file path. Directory where to store log
 print_switch_changes = True # Boolean. Print switch state changes to python terminal
 show_server_logs = False # Boolean. Displays the terminal logs from the OpenMCT and telemetry servers
 
+# Server
+openmct_port = 4000 # Integer. The port to connect to OpenMCT
+telemetry_port = 4001 # Integer. The port OpenMCT connects to for its historical data
+
 # Safety
 confirmation_keys = ['shift'] # List of keys for which keys to press to enable switch actuation. Uses AND logic. Leave empty for no confirmation [DANGEROUS!!!]. A list of valid keys (and how to write them for MIDGARD) can be found in valid_confirmation_keys.txt 
 debug_mode = True # Boolean. Enables or disables debug mode, allowing certain actions that would not normally be permitted due to safety concerns (mostly for ground testing)
-health_check_interval = 2 # Int or float. Interval at which the main thread checks for dead servers and threads
+health_check_interval = 2 # Int or float. Interval at which the main thread checks for dead servers and gv.threads
 openmct_dir = '' # String of absolute file path. Directory where OpenMCT is installed. Will attempt to install if it doesn't already exist. If left blank (ie ''), will use 'openmct' folder inside current working directory or build a new installation of OpenMCT (requires internet access).
 
 
@@ -82,37 +86,38 @@ peripherals = {
     #'labjack':{'interface':'usb', 'manufacturer':'LabJack', 'id':'1'},
 }
 
-if openmct_dir == '':
-    openmct_dir = os.path.join(os.path.dirname(__file__), "openmct")
-check_and_install_openmct(openmct_dir)
+gv.debug_mode = debug_mode
+gv.show_server_logs = show_server_logs
+gv.simulated_data = simulated_data
+gv.log_data = log_data
+gv.log_actuations = log_actuations
+gv.print_switch_changes = print_switch_changes
+gv.keep_db = keep_db
+gv.keep_csv = keep_csv
+gv.openmct_dir = openmct_dir
+gv.log_output_dir = log_output_dir
+gv.confirmation_keys = confirmation_keys
+gv.openmct_port = openmct_port
+gv.telemetry_port = telemetry_port
+gv.peripherals = peripherals
 
-threads = []
-servers = []
-stop_event = threading.Event()
-abort_state = threading.Event()
-non_abort_shutdown = threading.Event()
-startup_event = threading.Event()
+gv.telemetry = TelemetryServer()
 
-for name, args in peripherals.items():
-    peripherals[name] = Peripheral(stop_event, debug_mode, name, args)
+if gv.openmct_dir == '':
+    gv.openmct_dir = os.path.join(os.path.dirname(__file__), "openmct")
+check_and_install_openmct() 
+
+for name, args in gv.peripherals.items():
+    gv.peripherals[name] = Peripheral(name, args) 
     
-sync_groups: dict[str, list] = {}
-for p in peripherals.values():
+for p in gv.peripherals.values():
     for elem in p.actuators.values():
         group = elem.sync_group
         if group:
-            sync_groups.setdefault(group, []).append(elem)
+            gv.sync_groups.setdefault(group, []).append(elem)
 
-data_tree, all_keys = buildOpenMCTjs(peripherals)
-
-#print(data_tree)
-#print(all_keys)
-
-    
-openmct = OpenMCTServer(port=4000, openmct_dir=openmct_dir, show_logs=show_server_logs)
-telemetry = TelemetryServer(stop_event, log_data=log_data, log_actuations=log_actuations, log_output_dir=log_output_dir, port=4001, show_logs=show_server_logs)
-
-global_vars = (debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_db, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry)
+buildOpenMCTjs()
+gv.openmct = OpenMCTServer()
 
 
 def peripheral_worker(init_event):
@@ -123,15 +128,15 @@ def peripheral_worker(init_event):
             str_list = ['a','b','c','d','e','f','g','h','i','j','k']
             
         init_event.set()
-        print(f"[PeripheralHandler] started")
+        print_out(f"[PeripheralHandler] started")
         try:
-            while not stop_event.is_set():
+            while not gv.stop_event.is_set():
                 data = {}
                 if simulated_data:
                     time.sleep(0.1)
                     sample = {}
-                    for key in all_keys:
-                        element = get_element(data_tree, key)
+                    for key in gv.all_keys:
+                        element = get_element(gv.data_tree, key)
                         if element.element_class == 'Data_Stream':
                             if element.unit == 'bool': sample[key] = j
                             elif element.unit == 'str': sample[key] = str_list[math.floor(i/10)]
@@ -142,32 +147,42 @@ def peripheral_worker(init_event):
                     ts = int(time.time() * 1000)
                     data = {ts:sample}
                 else:
-                    for peripheral in peripherals.values():
+                    for peripheral in gv.peripherals.values():
                         if peripheral.manufacturer == 'NI':
                             try:
                                 data = peripheral.data_queue.get(timeout=0.2)
                             except Empty:
                                 continue
+                            except Exception as e:
+                                _, _, tb = sys.exc_info()
+                                print_out(f"[PeripheralHandler] NI Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
                             
                         elif peripheral.manufacturer == 'LabJack':
-                            ts_end = int(time.time() * 1000)
-                            ret = ljm.eStreamRead(peripheral.handle) # get data from labjack
-                            aData = ret[0]
-                            
-                            deinterleaved = np.array([aData[index::peripheral.numAddresses] for index in range(peripheral.numAddresses)]) # labjack returns a 1D arary, convert to 2d
-                            
-                            sensor_data = []
-                            for channel in peripheral.channels:
-                                chanNumAbs = peripheral.channels.index(channel)
-                                channelData = deinterleaved[chanNumAbs]
-                                sensor_data.append(channelData)
-                            sensor_data = np.array(sensor_data).T
-                            
-                            for i, sample in enumerate(sensor_data): # Number of data samples
-                                ts = ts_end - (len(sensor_data) - i) * (1/peripheral.pull_freq) * 1e9  # the timestamp we get is from the last data point so we need to calculate the timestamps backwards from this
-                                data[ts] = {}
-                                for j, channel in enumerate(peripheral.channels): # Number of channels
-                                    data[ts][channel.key] = sample[j] * channel.scale + channel.offset
+                            try:
+                                ts_end = int(time.time() * 1000)
+                                ret = ljm.eStreamRead(peripheral.handle) # get data from labjack
+                                aData = ret[0]
+                                
+                                if not aData:
+                                    continue
+                                
+                                deinterleaved = np.array([aData[index::peripheral.numAddresses] for index in range(peripheral.numAddresses)]) # labjack returns a 1D arary, convert to 2d
+                                
+                                sensor_data = []
+                                for channel in peripheral.channels:
+                                    chanNumAbs = peripheral.channels.index(channel)
+                                    channelData = deinterleaved[chanNumAbs]
+                                    sensor_data.append(channelData)
+                                sensor_data = np.array(sensor_data).T
+                                
+                                for i, sample in enumerate(sensor_data): # Number of data samples
+                                    ts = ts_end - (len(sensor_data) - i) * (1/peripheral.pull_freq) * 1e9  # the timestamp we get is from the last data point so we need to calculate the timestamps backwards from this
+                                    data[ts] = {}
+                                    for j, channel in enumerate(peripheral.channels): # Number of channels
+                                        data[ts][channel.key] = sample[j] * channel.scale + channel.offset
+                            except Exception as e:
+                                _, _, tb = sys.exc_info()
+                                print_out(f"[PeripheralHandler] LabJack Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
                                     
                         elif peripheral.interface.type == 'radio':
                             if peripheral.interface.protocol == 'mavlink':
@@ -175,42 +190,43 @@ def peripheral_worker(init_event):
                             elif peripheral.interface.protocol == 'elrs':
                                 pass
                 
-                #print(data)
+                #print_out(data)
                 max_utc = max(data)
                 for ts, sample in sorted(data.items()):
                     for stream_key, value in sample.items():
+                        element = get_element(gv.data_tree, stream_key)
                         if ts == max_utc:
-                            telemetry.send(ts, stream_key, value, data_tree, "peripheral")
+                            gv.telemetry.send(ts, stream_key, value, element, "peripheral")
                             if print_switch_changes and stream_key.split('.')[1] in ['Actuator', 'State']:
-                                write_actuation(global_vars, key, value, "peripheral", do_print=print_switch_changes)
+                                write_actuation(key, value, "peripheral", do_print=print_switch_changes)
                         else:
-                            telemetry.send(ts, stream_key, value, data_tree, "peripheral", push_to_gui=False)
+                            gv.telemetry.send(ts, stream_key, value, element, "peripheral", push_to_gui=False)
                 
         except Exception as e:
             _, _, tb = sys.exc_info()
-            print(f"[PeripheralHandler] Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
+            print_out(f"[PeripheralHandler] Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
                 
     except Exception as e:
-        if not stop_event.is_set():
+        if not gv.stop_event.is_set():
             _, _, tb = sys.exc_info()
-            print(f"[PeripheralHandler] Setup Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[PeripheralHandler] Setup Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
     finally: 
-        print(f"[PeripheralHandler] stopped")
+        print_out(f"[PeripheralHandler] stopped")
         
 def gui_worker(init_event):
     # Handles all user inputs from GUI
     try:
-        for key in all_keys: # Populate default values
-            element = get_element(data_tree, key)
+        for key in gv.all_keys: # Populate default values
+            element = get_element(gv.data_tree, key)
             default = getattr(element, 'default', None)
             if default is not None:
-                write_actuation(global_vars, key, default, "auto", do_print=False)
+                write_actuation(key, default, "auto", do_print=False)
 
         init_event.set()
-        print(f"[GUIHandler] started")
-        while not stop_event.is_set():
+        print_out(f"[GUIHandler] started")
+        while not gv.stop_event.is_set():
             try:
-                cmd = telemetry.command_queue.get(timeout=0.1)
+                cmd = gv.telemetry.command_queue.get(timeout=0.1)
             except Empty:
                 continue
             
@@ -218,108 +234,107 @@ def gui_worker(init_event):
                 
             key, requested = cmd["key"], cmd["requested"]
 
-            element = get_element(data_tree, key)
+            element = get_element(gv.data_tree, key)
             if element is None:
-                print(f"[GUIHandler] Unknown GUI Key Error: '{key}'")
+                print_out(f"[GUIHandler] Unknown GUI Key Error: '{key}'")
                 continue
             
             missing_keys = [k for k in confirmation_keys if k not in pressed_keys]
-            write_actuation(global_vars, key, requested, "user", missing_keys=missing_keys, do_print=print_switch_changes, )
+            write_actuation(key, requested, "user", missing_keys=missing_keys, do_print=print_switch_changes, )
                     
                 
     except Exception as e:
-        if not stop_event.is_set():
+        if not gv.stop_event.is_set():
             _, _, tb = sys.exc_info()
-            print(f"[GUIHandler] Initial Write Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[GUIHandler] Initial Write Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
     finally: # write nominal states for all switches
-        for key in all_keys: # Populate default values
-            element = get_element(data_tree, key)
+        for key in gv.all_keys: # Populate default values
+            element = get_element(gv.data_tree, key)
             default = getattr(element, 'nominal', None)
             if default is not None:
-                write_actuation(global_vars, key, default, "auto", do_print=False)
-        print(f"[GUIHandler] stopped")
-        
+                write_actuation(key, default, "auto", do_print=False)
+        print_out(f"[GUIHandler] stopped")
 
 
 def main():
     try:
         # Check configs
-        check_configs(global_vars)
+        check_configs()
         
         # Create servers
-        openmct.start()
-        servers.append(("OpenMCTServer", openmct))
-        telemetry.start()
-        servers.append(("TelemetryServer", telemetry))
+        gv.openmct.start()
+        gv.servers.append(("OpenMCTServer", gv.openmct))
+        gv.telemetry.start()
+        gv.servers.append(("TelemetryServer", gv.telemetry))
         
-        # Create Threads
+        # Create gv.threads
         peripheral_init_event = threading.Event()
         peripheral_handler = threading.Thread(target=peripheral_worker, name="PeripheralHandler", args=(peripheral_init_event,))
         peripheral_handler.daemon = True
         peripheral_handler.start()
-        threads.append(("PeripheralHandler", peripheral_handler))
+        gv.threads.append(("PeripheralHandler", peripheral_handler))
         
         gui_init_event = threading.Event()
         gui_handler = threading.Thread(target=gui_worker, name="GUIHandler", args=(gui_init_event,))
         gui_handler.daemon = True
         gui_handler.start()
-        threads.append(("GUIHandler", gui_handler))
+        gv.threads.append(("GUIHandler", gui_handler))
         
-        while not (peripheral_init_event.is_set() and gui_init_event.is_set()): # wait for all threads to initialize 
+        while not (peripheral_init_event.is_set() and gui_init_event.is_set()): # wait for all gv.threads to initialize 
             time.sleep(.1)
         
-        write_actuation(global_vars, peripherals['Valhala_I'].elements['flight_phase'].key, 'pad', "auto", do_print=False) ##### TEMP!!! #####
+        write_actuation(gv.peripherals['Valhala_I'].elements['flight_phase'].key, 'pad', "auto", do_print=False) ##### TEMP!!! #####
         
-        print("\n\nPress Ctrl+C to stop...\n\n")
-        while not stop_event.is_set():
+        gv.startup_event.set()
+        print_out("\n\nPress Ctrl+C to stop...\n\n")
+        while not gv.stop_event.is_set():
             try:
                 start = time.perf_counter()
                 
                 # Check for dead servers
-                dead_servers = [(name, s) for name, s in servers if not s.is_running]
+                dead_servers = [(name, s) for name, s in gv.servers if not s.is_running]
                 if dead_servers:
-                    print(f"[HealthCheck] Warning: Dead servers detected: {[name for name, _ in dead_servers]}")
+                    print_out(f"[HealthCheck] Warning: Dead servers detected: {[name for name, _ in dead_servers]}")
                     
-                # Check for dead threads
-                dead_threads = [(name, t) for name, t in threads if not t.is_alive()]
+                # Check for dead gv.threads
+                dead_threads = [(name, t) for name, t in gv.threads if not t.is_alive()]
                 if dead_threads:
-                    print(f"[HealthCheck] Warning: Dead threads detected: {[name for name, _ in dead_threads]}")
+                    print_out(f"[HealthCheck] Warning: Dead gv.threads detected: {[name for name, _ in dead_threads]}")
                 
                 # Wait for next interval
-                while (time.perf_counter() - start < health_check_interval) and not stop_event.is_set():
-                    if non_abort_shutdown.is_set(): # check for special conditions
-                        if not stop_event.is_set():
-                            shutdown(global_vars, do_abort=False)
+                while (time.perf_counter() - start < health_check_interval) and not gv.stop_event.is_set():
+                    if gv.non_abort_shutdown.is_set(): # check for special conditions
+                        if not gv.stop_event.is_set():
+                            shutdown(do_abort=False)
                     time.sleep(.05)
                 
             except Exception as e:
                 _, _, tb = sys.exc_info()
-                print(f"[HealthCheck] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")# write initial display with settings
+                print_out(f"[HealthCheck] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")# write initial display with settings
                 time.sleep(1)
-        if not stop_event.is_set():
-            shutdown(global_vars)
+        if not gv.stop_event.is_set():
+            shutdown()
         
     except KeyboardInterrupt as e:
-        if not stop_event.is_set():
-            shutdown(global_vars)
+        if not gv.stop_event.is_set():
+            shutdown()
 
     except Exception as e:
         _, _, tb = sys.exc_info()
-        print(f"[Main Thread] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
-        if not stop_event.is_set():
-            shutdown(global_vars)
+        print_out(f"[Main Thread] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+        if not gv.stop_event.is_set():
+            shutdown()
 
 if __name__ == '__main__':
     main()
 
 '''
+# mavlink
 
 COMPLETED:
-    Completed function logic for buttons, switches, and selectors
-    OpenMCT on multiple machines (OpenMCT now checks which keys are pressed)
-    Install OpenMCT on first run, checks that openmct folder is actually openmct, checks for updates
-    Parent file from other manufacturer
-    Add inhibited view state to GUI (dark gray)
+    NI data is now prioritized
+    Terminal display in openmct (added message type actuator to display custom terminals)
+    Created gv global_variables objects
 
 
 TO DO
@@ -336,6 +351,7 @@ TO DO
             Check sequences use a supported control_type
             Check that actuators have no buttons in armed_by and disarmed_by
             Check that states only have other states in their selector in transition_to
+        Add warnings for settings (ie keep_csv = False)
         Armed and disarmed from another peripheral
     Overseer
         Restart of MIDGARD or peripheral handling
@@ -347,10 +363,8 @@ TO DO
             Servo Alignment
             Map (Geofence and Course)
             Fuel Bar
-            Terminal Display
     Data Handling
         Recieving data from peripherals
-        Data priority (bypass, gpio 24/25, diagnostics, etc)
         Import csv logs into database
     Actuator Control
         Actuating radio peripherals

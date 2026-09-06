@@ -23,6 +23,8 @@ function DictionaryPlugin() {
 	  if (node.trigger) {
 		return { identifier: identifier, name: node.name, type: 'midgard.trigger', location: location };
 	  }
+	  
+	  var domainType = node.control ? 'midgard.control' : 'midgard.telemetry';
 
 	  var valueDef = Object.assign(
 		{ key: 'value', name: node.name, hints: { range: 1 } },
@@ -32,7 +34,7 @@ function DictionaryPlugin() {
 	  return {
 		identifier: identifier,
 		name: node.name,
-		type: 'midgard.telemetry',
+		type: domainType,
 		location: location,
 		telemetry: {
 		  values: [

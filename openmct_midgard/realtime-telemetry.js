@@ -1,4 +1,6 @@
-var midgardSocket = new WebSocket('ws://' + window.location.hostname + ':4001/realtime');
+var midgardSocket = new WebSocket(
+  'ws://' + window.location.hostname + ':' + (typeof MIDGARD_TELEMETRY_PORT !== 'undefined' ? MIDGARD_TELEMETRY_PORT : 4001) + '/realtime'
+);
 
 function RealtimeTelemetryPlugin() {
   return function install(openmct) {
@@ -12,9 +14,9 @@ function RealtimeTelemetryPlugin() {
 
     openmct.telemetry.addProvider({
       supportsSubscribe: function (domainObject) {
-	    return domainObject.type === 'midgard.telemetry';
-	  },
-      subscribe: function (domainObject, callback) {
+				return domainObject.type === 'midgard.telemetry' || domainObject.type === 'midgard.control';
+			},
+			subscribe: function (domainObject, callback) {
         var key = domainObject.identifier.key;
         listeners[key] = listeners[key] || [];
         listeners[key].push(callback);
