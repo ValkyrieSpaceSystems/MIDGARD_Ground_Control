@@ -1,4 +1,4 @@
-var midgardSocket = new WebSocket('ws://localhost:4001/realtime');
+var midgardSocket = new WebSocket('ws://' + window.location.hostname + ':4001/realtime');
 
 function RealtimeTelemetryPlugin() {
   return function install(openmct) {

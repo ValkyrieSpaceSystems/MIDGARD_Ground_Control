@@ -1,4 +1,4 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error
 import numpy as np
 from queue import Queue, Empty, Full
 from datetime import datetime, UTC
@@ -15,7 +15,7 @@ import nidaqmx.system
 from labjack import ljm
 import Basilisk
 
-from midgard_functions import get_element, combine_with_and, label, check_configs, write_actuation, abort, unabort, shutdown
+from midgard_functions import get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, write_actuation, abort, unabort, shutdown
 
 
 def _safe_key(*parts):
@@ -173,7 +173,7 @@ class OpenMCTServer:
 
         if not os.path.isdir(self.dist_dir):
             raise FileNotFoundError(
-                f"{self.dist_dir} not found — run `npm run build` inside {openmct_dir} first"
+                f"{self.dist_dir} not found — run `npm run build` inside {openmct_dir} first and make sure node.js and npm are installed properly"
             )
 
         self.app = FastAPI()
@@ -282,7 +282,6 @@ class TelemetryServer:
         self.command_queue = Queue()
 
         self._init_db()
-        self._init_log()
         self._register_routes()
 
     # ---------------- storage ----------------
@@ -293,31 +292,25 @@ class TelemetryServer:
         self._db_conn.execute("PRAGMA busy_timeout=5000")
         with self._db_lock:
             self._db_conn.execute(
-                "CREATE TABLE IF NOT EXISTS telemetry (key TEXT NOT NULL, value REAL, utc INTEGER NOT NULL, source TEXT)"
+                "CREATE TABLE IF NOT EXISTS telemetry (key TEXT NOT NULL, value REAL, utc INTEGER NOT NULL, source TEXT, inhibited TEXT)"
             )
-            existing_cols = [row[1] for row in self._db_conn.execute("PRAGMA table_info(telemetry)").fetchall()]
-            if "source" not in existing_cols:
-                self._db_conn.execute("ALTER TABLE telemetry ADD COLUMN source TEXT")
             self._db_conn.execute("CREATE INDEX IF NOT EXISTS idx_key_utc ON telemetry(key, utc)")
             self._db_conn.commit()
-            
-    def _init_log(self):
-        pass
 
-    def _store(self, key, value, utc, source=None):
+    def _store(self, key, value, utc, source=None, inhibited=None):
         with self._db_lock:
             self._db_conn.execute(
-                "INSERT INTO telemetry (key, value, utc, source) VALUES (?, ?, ?, ?)", (key, value, utc, source)
+                "INSERT INTO telemetry (key, value, utc, source, inhibited) VALUES (?, ?, ?, ?, ?)", (key, value, utc, source, json.dumps(inhibited))
             )
             self._db_conn.commit()
 
     def _query_history(self, key, start, end):
         with self._db_lock:
             rows = self._db_conn.execute(
-                "SELECT value, utc, source FROM telemetry WHERE key = ? AND utc BETWEEN ? AND ? ORDER BY utc",
+                "SELECT value, utc, source, inhibited FROM telemetry WHERE key = ? AND utc BETWEEN ? AND ? ORDER BY utc",
                 (key, start, end),
             ).fetchall()
-        return [{"key": key, "value": v, "utc": u, "source": s} for v, u, s in rows]
+        return [{"key": key, "value": v, "utc": u, "source": s, "inhibited": json.loads(i)} for v, u, s, i in rows]
     
     def _flush_buffer(self):
         with self._buffer_lock:
@@ -326,7 +319,7 @@ class TelemetryServer:
             batch, self._write_buffer = self._write_buffer, []
         with self._db_lock:
             self._db_conn.executemany(
-                "INSERT INTO telemetry (key, value, utc, source) VALUES (?, ?, ?, ?)", batch
+                "INSERT INTO telemetry (key, value, utc, source, inhibited) VALUES (?, ?, ?, ?, ?)", batch
             )
             self._db_conn.commit()
 
@@ -361,7 +354,7 @@ class TelemetryServer:
                         continue
 
                     if msg.get("cmd") == "request" and "key" in msg and "requested" in msg:
-                        self.command_queue.put_nowait({"key": msg["key"], "requested": msg["requested"]})
+                        self.command_queue.put_nowait({"key": msg["key"], "requested": msg["requested"], "pressed_keys": msg.get("pressed_keys", [])})
             except WebSocketDisconnect:
                 pass
             finally:
@@ -393,7 +386,7 @@ class TelemetryServer:
                 self.csv_path = os.path.join(self.log_output_dir,f"{time.strftime("%Y-%m-%d_%H-%M-%S")}.csv") if self.log_output_dir is not None else os.path.join(os.path.dirname(__file__), "logs", f"{time.strftime("%Y-%m-%d_%H-%M-%S")}.csv")
                 self.csv_files.append(self.csv_path)
                 
-                header = ["unix_time_ns", "key", "value", "source"]
+                header = ["unix_time_ns", "key", "value", "source", "inhibited"]
                 self.csv_file = open(f'{self.csv_path}', 'a', newline='', buffering=1<<16)
                 self.csv_writer = csv.writer(self.csv_file)
                 self.csv_writer.writerow(header)
@@ -432,7 +425,7 @@ class TelemetryServer:
 
     # ---------------- publish data ----------------
 
-    def send(self, utc: int, key: str, value, data_tree, source: str, immediate=False, push_to_gui=True):
+    def send(self, utc: int, key: str, value, data_tree, source: str, inhibited=None, immediate=False, push_to_gui=True):
         try:
             if not self.is_running:
                 print('[TelemetryServer] Cannot send data because server is not running')
@@ -442,42 +435,48 @@ class TelemetryServer:
                 
             element = get_element(data_tree, key)
             
-            def _push(utc, key, value, source, push_to_gui):
-                if self.is_running:
-                    if self.buffer_interval and not immediate:
-                        with self._buffer_lock:
-                            self._write_buffer.append((key, value, utc, source))
-                    else:
-                        self._store(key, value, utc, source)
+            def _push(utc, key, value, source, push_to_gui, inhibited=None):
+                try:
+                    if self.is_running:
+                        if self.buffer_interval and not immediate:
+                            with self._buffer_lock:
+                                self._write_buffer.append((key, value, utc, source, inhibited))
+                        else:
+                            self._store(key, value, utc, source, inhibited)
 
-                if push_to_gui: 
-                    asyncio.run_coroutine_threadsafe(self._broadcast(key, value, utc, source), self._loop)
-                    
-                if self.logging:
-                    if self.buffer_interval and not immediate:
-                        with self._buffer_lock:
-                            self._log_buffer.append((utc, key, value, source))
-                    else:
-                        self.csv_writer.writerow((utc, key, value, source))
+                    if push_to_gui: 
+                        asyncio.run_coroutine_threadsafe(self._broadcast(key, value, utc, source, inhibited), self._loop)
                         
-            if element.element_class in ['State', 'Actuator']: # Write preactuation state to show actuation on a graph as a step instead of a long slope
-                _push(utc, key, element.value, source, False)
-                
-            element.value = value
-            _push(utc, key, element.value, source, push_to_gui=push_to_gui)
+                    if self.logging:
+                        if self.buffer_interval and not immediate:
+                            with self._buffer_lock:
+                                self._log_buffer.append((utc, key, value, source, inhibited))
+                        else:
+                            self.csv_writer.writerow((utc, key, value, source, inhibited))
+                except Exception as e:
+                    _, _, tb = sys.exc_info()
+                    print(f"[TelemetryServer] Push Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
             
             if element.control_type == 'selector':
                 for i in range(len(element.states_index)):
                     element.states_index[i].value = False
                 element.states_index[value].value = True
+                inhibited = [any(not bool(elem.value) for elem in state.armed_by) or any(bool(elem.value) for elem in state.disarmed_by) or element.states_index[value] not in state.transition_from for state in element.states_index]
+                
+            if element.element_class in ['State', 'Actuator']: # Write preactuation state to show actuation on a graph as a step instead of a long slope
+                _push(utc-1, key, element.value, source, False)
+                
+            element.value = value
+            _push(utc, key, element.value, source, push_to_gui=push_to_gui, inhibited=inhibited)
+            
             
         except Exception as e:
             _, _, tb = sys.exc_info()
             print(f"[TelemetryServer] Send Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
-            
 
-    async def _broadcast(self, key, value, utc, source=None):
-        point = json.dumps({"key": key, "value": value, "utc": utc, "source": source})
+
+    async def _broadcast(self, key, value, utc, source=None, inhibited=None):
+        point = json.dumps({"key": key, "value": value, "utc": utc, "source": source, "inhibited": inhibited})
         for client in list(self._clients):
             try:
                 await client.send_text(point)

@@ -46,9 +46,9 @@ id = "flight_phase"
 name = "Flight Phase"
 description = "Phase of flight selector/display"
 type = "selector"
-file = "test_thread"
-function = "run"
-function_type = "thread"
+#function_file = "test_thread"
+#function = "run"
+#function_type = "thread"
 default = "startup"
 nominal = "pad"
 
@@ -80,6 +80,7 @@ transition_to = ["phase.ascent", "phase.pad"]
 armed_by = ["lockout.main_lock"] # all must be true
 disarmed_by = ["lockout.abort"] # all must be false
 sources = ["user"]
+#do_function = true
 
 [[state]]
 id = "ascent"

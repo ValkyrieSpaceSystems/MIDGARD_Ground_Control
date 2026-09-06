@@ -11,6 +11,28 @@ var SWITCH_DISPLAY_OVERRIDES = {
   // 'Valhala_I.Actuators.main_lock': { namePosition: 'left', nameAlign: 'right' },
 };
 
+// ---- Confirmation-key tracking (client-side, per-viewer) ----
+var JS_KEY_TO_PYNPUT_NAME = {
+  'Shift': 'shift', 'Control': 'ctrl', 'Alt': 'alt', 'Meta': 'cmd',
+  'CapsLock': 'caps_lock', 'Tab': 'tab', 'Enter': 'enter',
+  'Escape': 'esc', 'Backspace': 'backspace', ' ': 'space',
+  'ArrowUp': 'up', 'ArrowDown': 'down', 'ArrowLeft': 'left', 'ArrowRight': 'right',
+  'Home': 'home', 'End': 'end', 'PageUp': 'page_up', 'PageDown': 'page_down',
+  'Delete': 'delete', 'Insert': 'insert',
+  'F1': 'f1', 'F2': 'f2', 'F3': 'f3', 'F4': 'f4', 'F5': 'f5', 'F6': 'f6',
+  'F7': 'f7', 'F8': 'f8', 'F9': 'f9', 'F10': 'f10', 'F11': 'f11', 'F12': 'f12',
+  'Pause': 'pause', 'ScrollLock': 'scroll_lock', 'PrintScreen': 'print_screen', 'ContextMenu': 'menu'
+};
+
+function canonicalKeyName(jsKey) {
+  return JS_KEY_TO_PYNPUT_NAME[jsKey] || jsKey.toLowerCase();
+}
+
+var pressedKeys = new Set();
+document.addEventListener('keydown', function (e) { pressedKeys.add(canonicalKeyName(e.key)); });
+document.addEventListener('keyup', function (e) { pressedKeys.delete(canonicalKeyName(e.key)); });
+window.addEventListener('blur', function () { pressedKeys.clear(); });   // prevents a "stuck" key if the tab loses focus mid-hold
+
 function getSwitchConfig(domainObject) {
   return Object.assign(
     {},
@@ -21,7 +43,8 @@ function getSwitchConfig(domainObject) {
 }
 
 function sendCommand(key, payload) {
-  midgardSocket.send(JSON.stringify(Object.assign({ key: key }, payload)));
+  var full = Object.assign({ key: key, pressed_keys: Array.from(pressedKeys) }, payload);
+  midgardSocket.send(JSON.stringify(full));
 }
 
 // ---- Hides the Display Layout hover toolbar (View Large / Save to Notebook) ----
@@ -76,6 +99,11 @@ function getValueMetadata(openmct, domainObject) {
   return metadata.valueMetadatas.find(function (v) { return v.key === 'value'; });
 }
 
+function fetchHistory(key) {
+  var url = 'http://' + window.location.hostname + ':4001/history/' + key + '?start=0&end=' + Date.now();
+  return fetch(url).then(function (r) { return r.json(); });
+}
+
 function SwitchViewPlugin() {
   return function install(openmct) {
 
@@ -91,13 +119,14 @@ function SwitchViewPlugin() {
       },
       view: function (domainObject) {
         var container, unsubscribe, overlayObserver;
-        var currentValue = null, pending = false;
+        var currentValue = null, currentInhibited = false, pending = false;
         var cfg = getSwitchConfig(domainObject);
         var valueDef = getValueMetadata(openmct, domainObject);
         var enumerations = valueDef.enumerations;
         var style = valueDef.style || {};
         var COLOR_SELECTED = style.selected || '#5b9bd5';
         var COLOR_UNSELECTED = style.unselected || '#41464c';
+        var COLOR_INHIBITED = style.inhibited || '#2c2f33';
         var COLOR_PENDING = '#888888';
 
         function send(requestedValue) {
@@ -115,12 +144,13 @@ function SwitchViewPlugin() {
 
           var btn = document.createElement('button');
           var current = enumerations.find(function (e) { return e.value === currentValue; });
+          var isOn = currentValue === enumerations[1].value;
           btn.textContent = current ? current.string : '—';
           btn.style.cssText =
             'width:100%; height:100%; min-height:32px; border:none; border-radius:4px; ' +
             'font-size:14px; cursor:pointer; color:#fff; padding:0 10px; box-sizing:border-box; ' +
             'text-align:' + cfg.valueAlign + '; background:' +
-            (pending ? COLOR_PENDING : (currentValue === enumerations[1].value ? COLOR_SELECTED : COLOR_UNSELECTED));
+            (pending ? COLOR_PENDING : (isOn ? COLOR_SELECTED : (currentInhibited ? COLOR_INHIBITED : COLOR_UNSELECTED)));
           btn.onclick = function () {
             send(currentValue === enumerations[0].value ? enumerations[1].value : enumerations[0].value);
           };
@@ -136,11 +166,17 @@ function SwitchViewPlugin() {
             overlayObserver = hideFrameOverlayControls(element);
 
             openmct.telemetry.request(domainObject, { start: 0, end: Date.now() }).then(function (points) {
-            	console.log('[MIDGARD DEBUG]', domainObject.identifier.key, 'points:', points, 'enumerations:', enumerations);
-              if (points && points.length) { currentValue = points[points.length - 1].value; render(); }
+              if (points && points.length) {
+                currentValue = points[points.length - 1].value;
+                currentInhibited = !!points[points.length - 1].inhibited;
+                render();
+              }
             });
             unsubscribe = openmct.telemetry.subscribe(domainObject, function (datum) {
-              currentValue = datum.value; pending = false; render();
+              currentValue = datum.value;
+              currentInhibited = !!datum.inhibited;
+              pending = false;
+              render();
             });
           },
           destroy: function () {
@@ -164,21 +200,22 @@ function SwitchViewPlugin() {
       },
       view: function (domainObject) {
         var container, unsubscribe, overlayObserver;
-        var currentValue = null, pending = false;
+        var currentValue = null, currentInhibited = null, pendingValue = null;
         var cfg = getSwitchConfig(domainObject);
         var valueDef = getValueMetadata(openmct, domainObject);
         var enumerations = valueDef.enumerations;
         var style = valueDef.style || {};
         var COLOR_SELECTED = style.selected || '#5b9bd5';
-        var COLOR_UNSELECTED = style.unselected || '#2c2f33';
+        var COLOR_UNSELECTED = style.unselected || '#41464c';
+        var COLOR_INHIBITED = style.inhibited || '#2c2f33';
         var COLOR_PENDING = '#888888';
 
         function send(requestedValue) {
-          if (pending) return;
-          pending = true;
-          render();
-          sendCommand(domainObject.identifier.key, { cmd: 'request', requested: requestedValue });
-        }
+					if (pendingValue !== null) return;
+					pendingValue = requestedValue;
+					render();
+					sendCommand(domainObject.identifier.key, { cmd: 'request', requested: requestedValue });
+				}
 
         function render() {
           if (!container) return;
@@ -192,13 +229,15 @@ function SwitchViewPlugin() {
           enumerations.forEach(function (e, i) {
             var seg = document.createElement('div');
             var isSelected = e.value === currentValue;
+            var segInhibited = Array.isArray(currentInhibited) && !!currentInhibited[i];
             seg.textContent = e.string;
-            seg.style.cssText =
-              'flex:1; display:flex; align-items:center; justify-content:' +
-              ({ left: 'flex-start', center: 'center', right: 'flex-end' }[cfg.valueAlign] || 'center') + '; ' +
-              'padding:0 8px; font-size:12px; cursor:pointer; color:#fff; box-sizing:border-box; ' +
-              (i < enumerations.length - 1 ? 'border-right:1px solid rgba(0,0,0,0.4); ' : '') +
-              'background:' + (pending ? COLOR_PENDING : (isSelected ? COLOR_SELECTED : COLOR_UNSELECTED));
+            var isPending = pendingValue === e.value;
+						seg.style.cssText =
+							'flex:1; display:flex; align-items:center; justify-content:' +
+							({ left: 'flex-start', center: 'center', right: 'flex-end' }[cfg.valueAlign] || 'center') + '; ' +
+							'padding:0 8px; font-size:12px; cursor:pointer; color:#fff; box-sizing:border-box; ' +
+							(i < enumerations.length - 1 ? 'border-right:1px solid rgba(0,0,0,0.4); ' : '') +
+							'background:' + (isPending ? COLOR_PENDING : (isSelected ? COLOR_SELECTED : (segInhibited ? COLOR_INHIBITED : COLOR_UNSELECTED)));
             seg.onclick = function () { send(e.value); };
             track.appendChild(seg);
           });
@@ -214,11 +253,18 @@ function SwitchViewPlugin() {
             overlayObserver = hideFrameOverlayControls(element);
 
             openmct.telemetry.request(domainObject, { start: 0, end: Date.now() }).then(function (points) {
-              if (points && points.length) { currentValue = points[points.length - 1].value; render(); }
+              if (points && points.length) {
+                currentValue = points[points.length - 1].value;
+                currentInhibited = points[points.length - 1].inhibited;
+                render();
+              }
             });
             unsubscribe = openmct.telemetry.subscribe(domainObject, function (datum) {
-              currentValue = datum.value; pending = false; render();
-            });
+							currentValue = datum.value;
+							currentInhibited = datum.inhibited;
+							pendingValue = null;
+							render();
+						});
           },
           destroy: function () {
             if (unsubscribe) unsubscribe();
@@ -229,7 +275,10 @@ function SwitchViewPlugin() {
       priority: function () { return 1; }
     });
 
-    // ============ BUTTON — stateless trigger ============
+    // ============ BUTTON — stateless trigger, but can still be inhibited ============
+    // Type 'midgard.trigger' is intentionally NOT part of openmct.telemetry (no
+    // real value/history to plot) — so inhibited status is read via a direct
+    // history fetch + raw midgardSocket listener, bypassing the telemetry API.
     openmct.types.addType('midgard.trigger', { name: 'Trigger', cssClass: 'icon-button' });
 
     openmct.objectViews.addProvider({
@@ -238,15 +287,26 @@ function SwitchViewPlugin() {
       cssClass: 'icon-button',
       canView: function (domainObject) { return domainObject.type === 'midgard.trigger'; },
       view: function (domainObject) {
-        var container, overlayObserver;
+        var container, btn, onMessage;
+        var currentInhibited = false, flashing = false;
+        var cfg = getSwitchConfig(domainObject);
+        var COLOR_BASE = '#41464c';
+        var COLOR_INHIBITED = (cfg && cfg.inhibitedColor) || '#2c2f33';
+        var COLOR_FLASH = '#888888';
+        var overlayObserver;
+
+        function render() {
+          if (!btn || flashing) return;
+          btn.style.background = currentInhibited ? COLOR_INHIBITED : COLOR_BASE;
+        }
 
         function fire() {
-		  sendCommand(domainObject.identifier.key, { cmd: 'request', requested: true });
-		  btn.style.background = '#888888';
-		  setTimeout(function () { btn.style.background = '#41464c'; }, 150);
-		}
+          sendCommand(domainObject.identifier.key, { cmd: 'request', requested: true });
+          flashing = true;
+          btn.style.background = COLOR_FLASH;
+          setTimeout(function () { flashing = false; render(); }, 150);
+        }
 
-        var btn;
         return {
           show: function (element) {
             container = document.createElement('div');
@@ -255,13 +315,30 @@ function SwitchViewPlugin() {
             btn.textContent = domainObject.name;
             btn.style.cssText =
               'width:100%; height:100%; min-height:32px; border:none; border-radius:4px; ' +
-              'font-size:14px; cursor:pointer; color:#fff; background:#41464c;';
+              'font-size:14px; cursor:pointer; color:#fff; background:' + COLOR_BASE + ';';
             btn.onclick = fire;
             container.appendChild(btn);
             element.appendChild(container);
             overlayObserver = hideFrameOverlayControls(element);
+
+            fetchHistory(domainObject.identifier.key).then(function (points) {
+              if (points && points.length) {
+                currentInhibited = !!points[points.length - 1].inhibited;
+                render();
+              }
+            });
+
+            onMessage = function (event) {
+              var point = JSON.parse(event.data);
+              if (point.key === domainObject.identifier.key) {
+                currentInhibited = !!point.inhibited;
+                render();
+              }
+            };
+            midgardSocket.addEventListener('message', onMessage);
           },
           destroy: function () {
+            if (onMessage) midgardSocket.removeEventListener('message', onMessage);
             if (overlayObserver) overlayObserver.disconnect();
           }
         };

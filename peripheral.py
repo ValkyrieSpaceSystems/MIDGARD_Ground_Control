@@ -1,4 +1,4 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error
 import numpy as np
 from queue import Queue, Empty, Full
 from datetime import datetime, UTC
@@ -15,7 +15,7 @@ import nidaqmx.system
 from labjack import ljm
 import Basilisk
 
-from midgard_functions import get_element, combine_with_and, label, check_configs, write_actuation, abort, unabort, shutdown
+from midgard_functions import get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, write_actuation, abort, unabort, shutdown
 
 
 PERIPHERALS_ROOT = os.path.join(os.path.dirname(__file__), "Peripherals")
@@ -71,12 +71,22 @@ def _resolve_inheritance(manufacturer: str, id_name: str, _seen: set | None = No
     _seen.add(key)
 
     raw = _load_toml(manufacturer, id_name)
-    parent_id = raw.get("meta", {}).get("parent")
-
-    if not parent_id:
+    parent = raw.get("meta", {}).get("parent", None)
+    
+    if not parent:
         return raw
+    else:
+        parent = parent.split('/')
+        if len(parent) == 1:
+            parent_manufacturer = manufacturer
+            parent_id = parent[0]
+        elif len(parent) == 2:
+            parent_manufacturer = parent[0]
+            parent_id = parent[1]
+        else:
+            raise [f'[MIDGARD WARNING] peripheral {id_name} has unsupported parent structure {parent}. Must be "parent_file" or "parent_manufacturer/parent_file"']
 
-    parent_raw = _resolve_inheritance(manufacturer, parent_id, _seen)
+    parent_raw = _resolve_inheritance(parent_manufacturer, parent_id, _seen)
     merged = _deep_merge(parent_raw, raw)
     merged.get("meta", {}).pop("parent", None)
     return merged
@@ -145,6 +155,7 @@ class State:
         self.arms                   = []
         self.disarms                = []
         self.sources: list[str]     = entry.get("sources", [])
+        self.do_function: bool      = entry.get("do_function", False)
         self.control_type           = 'state'
         self.index: int | None      = None
         self.value: bool            = False
@@ -164,7 +175,7 @@ class Actuator:
         self.description: str          = entry.get("description", "")
         self.type: str                 = entry["type"]
         self.subtype: str | None       = entry.get("subtype", None)
-        self.file                      = entry.get("file", None) # file
+        self.function_file             = entry.get("function_file", None) # file
         self.function_name             = entry.get("function", None) # function in file, default function is run()
         self.function_type             = entry.get("function_type", None) # trigger, sequence, thread
         self.module_num: int | None    = entry.get("module", None) 
@@ -184,8 +195,8 @@ class Actuator:
         
         if parent.debug_mode:
             self.sources = list(dict.fromkeys(list(self.sources) + self.debug_sources))
-        if self.file and self.function_name:
-            self.func = _load_element_function(parent.manufacturer, self.file, self.function_name)
+        if self.function_file and self.function_name:
+            self.func = _load_element_function(parent.manufacturer, self.function_file, self.function_name)
             if self.function_type == 'thread':
                 self.thread = None
                 self.stop_event = threading.Event()
@@ -266,6 +277,7 @@ class Actuator:
         elif self.control_type == "selector":
             self.default: str | int | None = entry.get("default", None)
             self.nominal: str | int | None = entry.get("nominal", self.default)
+            self.run_on_nominalize: bool   = entry.get("run_on_nominalize", False)
         elif self.control_type == "cluster":
             self.default: list[bool] = [entry.get("default", False)] * self.cluster_quantity
             self.default: list[bool] = [entry.get("nominal", entry.get("default", False))] * self.cluster_quantity
@@ -280,9 +292,10 @@ class Actuator:
         
         # ── Build selector-type actuators from sibling [[state]] entries ──────────
         if self.control_type == 'selector':
-            self.states = {s.id: s for s in self.parent.states.values()}
-            self.states_index = list(self.parent.states.values())
+            self.states = {s.id: s for s in self.parent.states.values() if s.parent == self.id}
+            self.states_index = list(self.states.values())
             self.states_name = [s.name for s in self.states_index]
+            self.function_states = [s for s in self.states_index if s.do_function]
             
             for index, state in enumerate(self.states_index):
                 state.index = index
@@ -615,6 +628,8 @@ class Peripheral:
                     cond = self.elements[cond_id]
                     element.transition_to[cond_index] = cond
                     cond.transition_from.append(element)
+                element.transition_to.append(element)
+                element.transition_from.append(element)
 
         # ── Remove elements ────────────────────────────────────────────
         to_remove = []

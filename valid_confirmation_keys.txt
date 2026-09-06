@@ -1,0 +1,49 @@
+Valid Confirmation Keys
+
+The following key categories are valid:
+
+1. Single character keys
+   Any single character string representing:
+   • A letter
+   • A number
+   • A keyboard symbol or punctuation character
+
+2. Function keys
+   • f1
+   • f2
+   • f3
+   • f4
+   • f5
+   • f6
+   • f7
+   • f8
+   • f9
+   • f10
+   • f11
+   • f12
+
+3. Special function keys
+   • shift
+   • ctrl
+   • alt
+   • cmd (aka windows key/mac command key)
+   • caps_lock
+   • tab
+   • enter
+   • esc
+   • backspace
+   • space
+   • up
+   • down
+   • left
+   • right
+   • home
+   • end
+   • page_up
+   • page_down
+   • delete
+   • insert
+   • pause
+   • scroll_lock
+   • print_screen
+   • menu

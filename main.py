@@ -1,4 +1,4 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error
 import numpy as np
 from queue import Queue, Empty, Full
 from datetime import datetime, UTC
@@ -17,16 +17,22 @@ import Basilisk
 
 from peripheral import Peripheral
 from openmct import OpenMCTServer, TelemetryServer, buildOpenMCTjs
-from midgard_functions import get_element, combine_with_and, label, check_configs, write_actuation, abort, unabort, shutdown
+from midgard_functions import get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, write_actuation, abort, unabort, shutdown
 
 
 '''
+prerequisite installed applications, git, nodejs(https://nodejs.org/en/download), npm
+
 peripheral folder containing folders for each manufacturer, each manufacturer has files for each ID containing information about the sensors (raw data), processed data, actuators, and other variables. each system and model has a gerneric file defining system and model specific variables and default values and telling MIDGARD how to communicate with this specific device on different interfaces and what interfaces are valid (optional interfaces will be defined in the other variables setting). system folders can also contain custom sequences for that system and id files can contain whether they're valid
+
+peripheral config files can inherit configs from other files in the structure parent = 'parent_file' for parent_file.toml in a manufacturer or parent = 'parent_folder/file_name' for parent_file.toml in parent_folder manufacturer
 
 peripherals are made of elements (data streams, actuators, lockouts, interfaces, and phases)
 
 for NI each cDAQ is a single peripheral
 
+selectors can only be nominalized if the transition is valid. a selector can only be nominalized if the nominal state is in the current state's transition to. example: while a rocket is in state ascent, it cannot be nominalized to the state pad. 
+selector nominal state should have all sources in its sources list because nominalization does not check for sources. 
 
 openmct was built with npm run build and is being served by fastapi through python. sqlite is the telemetry server serving realtime and historical data. 
 
@@ -38,9 +44,11 @@ if id and type are the same, the type folder will collapse and become the elemen
 
 cannot have duplicate ids of the same element class
 
+currently, only switches can be tied to a physical actuator, but other control_types can call a function to actuate a switch for them. this can be expanded, but will require more control logic.
+
 if a peripheral calls an actuation, midgard will ignore the elements in to_actuate when commanding the physical actuations (digital actuation will still occur) and rely on the peripheral to make those actuations without midgard needing to instruct them. the operating procedure is to have a duplicate of all actuators on both the peripheral and midgard with the propper configuration so propogated actuations occur the same on both systems (idealy use the same config file) (ie if ASGARD calls for main_lockout set to false, ASGARD and MIDGARD set everything armed by main_lockout False independently, but MIDGARD also sets the other peripherals that rely on what this peripheral actuated)
 
-sequences can be tied to any actuator (ehhhh), but buttons, switches, and selectors are recommended (at least for now). regular sequences just run code and threaded sequences will run the sequence as a thread. regular sequences are only supported by buttons (will run every actuation), switches (will run when True), and selectors (will run every change). threaded sequences are only supported by switches (will run when True) and selectors (will run always). 
+functions can be tied to any actuator, but buttons, switches, and selectors are recommended (at least for now). sequences just run code and threads will run the function as a thread. buttons will run a sequence every actuation (except when they become inhibited) and threads will be run forever (but cant have any armed or disarmed by and the thread must handle all safety logic) (BUTTON THREADS ARE NOT RECOMENDED!). Switches will run a sequence or thread if the value is true. Selectors will run the function if the state has do_function and will run always if no states have do_function (will run the function when nominalization occurs if nominalized state is not inhibited and do_on_nominalization is True)
 
 put in readme: Read the manual. life and limb could be at stake if you fail to understand how midgard actually works
 
@@ -53,6 +61,7 @@ put in readme: Read the manual. life and limb could be at stake if you fail to u
 log_data = True # Boolean. Log data to csv
 log_actuations = True # Boolean. Log GUI commands to csv
 simulated_data = True # Boolean. Discards peripheral data and replaces it with fake data. Meant for testing without actual peripherals/peripheral data.
+keep_db = False # Boolean. If False, deletes the OpenMCT SQL database containing historical telemetry data. Recommended to keep True in a production environment in case of accidents and to reload data after a MIDGARD restart, but not strictly necessary.
 keep_csv = False # Boolean. If False, deletes csv files after run. Should only be False in testing
 log_output_dir = '' # String of absolute file path. Directory where to store log files. Will attempt to make directory if it doesn't already exist. If left blank (ie ''), will use logs folder inside current working directory.
 
@@ -61,7 +70,7 @@ print_switch_changes = True # Boolean. Print switch state changes to python term
 show_server_logs = False # Boolean. Displays the terminal logs from the OpenMCT and telemetry servers
 
 # Safety
-confirmation_keys = [pynput.keyboard.Key.shift] # List of single character strings for keys or pynput.keyboard.Key for which keys to press to enable switch actuation. Uses AND logic. Leave empty for no confirmation [DANGEROUS!!!]
+confirmation_keys = ['shift'] # List of keys for which keys to press to enable switch actuation. Uses AND logic. Leave empty for no confirmation [DANGEROUS!!!]. A list of valid keys (and how to write them for MIDGARD) can be found in valid_confirmation_keys.txt 
 debug_mode = True # Boolean. Enables or disables debug mode, allowing certain actions that would not normally be permitted due to safety concerns (mostly for ground testing)
 health_check_interval = 2 # Int or float. Interval at which the main thread checks for dead servers and threads
 openmct_dir = '' # String of absolute file path. Directory where OpenMCT is installed. Will attempt to install if it doesn't already exist. If left blank (ie ''), will use 'openmct' folder inside current working directory or build a new installation of OpenMCT (requires internet access).
@@ -73,6 +82,9 @@ peripherals = {
     #'labjack':{'interface':'usb', 'manufacturer':'LabJack', 'id':'1'},
 }
 
+if openmct_dir == '':
+    openmct_dir = os.path.join(os.path.dirname(__file__), "openmct")
+check_and_install_openmct(openmct_dir)
 
 threads = []
 servers = []
@@ -96,10 +108,11 @@ data_tree, all_keys = buildOpenMCTjs(peripherals)
 #print(data_tree)
 #print(all_keys)
 
+    
 openmct = OpenMCTServer(port=4000, openmct_dir=openmct_dir, show_logs=show_server_logs)
 telemetry = TelemetryServer(stop_event, log_data=log_data, log_actuations=log_actuations, log_output_dir=log_output_dir, port=4001, show_logs=show_server_logs)
 
-global_vars = (debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry)
+global_vars = (debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_db, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry)
 
 
 def peripheral_worker(init_event):
@@ -186,65 +199,46 @@ def peripheral_worker(init_event):
         
 def gui_worker(init_event):
     # Handles all user inputs from GUI
-    try: 
-        pressed_keys=[]
-        def add_key(key): 
-            if key not in pressed_keys: 
-                pressed_keys.append(key)
-        def remove_key(key): 
-            if key in pressed_keys: 
-                pressed_keys.remove(key)
-        
-        try:
-            with pynput.keyboard.Listener(on_press = add_key, on_release = remove_key) as listener:
-                for key in all_keys: # Populate default values
-                    element = get_element(data_tree, key)
-                    default = getattr(element, 'default', None)
-                    if default is not None:
-                        write_actuation(global_vars, key, default, "auto", do_print=False)
-        
-                init_event.set()
-                print(f"[GUIHandler] started")
-                while not stop_event.is_set():
-                    try:
-                        cmd = telemetry.command_queue.get(timeout=0.1)
-                    except Empty:
-                        continue
+    try:
+        for key in all_keys: # Populate default values
+            element = get_element(data_tree, key)
+            default = getattr(element, 'default', None)
+            if default is not None:
+                write_actuation(global_vars, key, default, "auto", do_print=False)
+
+        init_event.set()
+        print(f"[GUIHandler] started")
+        while not stop_event.is_set():
+            try:
+                cmd = telemetry.command_queue.get(timeout=0.1)
+            except Empty:
+                continue
+            
+            pressed_keys = [str(k).lower() for k in cmd.get("pressed_keys", [])]
+                
+            key, requested = cmd["key"], cmd["requested"]
+
+            element = get_element(data_tree, key)
+            if element is None:
+                print(f"[GUIHandler] Unknown GUI Key Error: '{key}'")
+                continue
+            
+            missing_keys = [k for k in confirmation_keys if k not in pressed_keys]
+            write_actuation(global_vars, key, requested, "user", missing_keys=missing_keys, do_print=print_switch_changes, )
                     
-                    pressed = all(k in pressed_keys for k in confirmation_keys)
-                        
-                    key, requested = cmd["key"], cmd["requested"]
-        
-                    element = get_element(data_tree, key)
-                    if element is None:
-                        print(f"[GUIHandler] Unknown GUI Key Error: '{key}'")
-                        continue
-                    
-                    missing_keys = [k for k in confirmation_keys if k not in pressed_keys]
-                    write_actuation(global_vars, key, requested, "user", do_print=print_switch_changes, pressed=pressed, missing_keys=missing_keys)
-                        
-                    
-        except Exception as e:
-            if not stop_event.is_set():
-                _, _, tb = sys.exc_info()
-                print(f"[GUIHandler] Initial Write Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
-        finally: # write nominal states for all switches
-            for key in all_keys: # Populate default values
-                element = get_element(data_tree, key)
-                default = getattr(element, 'nominal', None)
-                if default is not None:
-                    write_actuation(global_vars, key, default, "auto", do_print=False)
-            pass
                 
     except Exception as e:
+        if not stop_event.is_set():
             _, _, tb = sys.exc_info()
-            '''if type(e).__name__ == 'StreamClosed'  or type(e).__name__ == 'ConnectionClosedError': # if synnax cluster stops unexpectedly
-                if not non_abort_shutdown.is_set():
-                    non_abort_shutdown.set()
-            else:'''
-            print(f"[GUIHandler] Setup error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
-    finally: 
+            print(f"[GUIHandler] Initial Write Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+    finally: # write nominal states for all switches
+        for key in all_keys: # Populate default values
+            element = get_element(data_tree, key)
+            default = getattr(element, 'nominal', None)
+            if default is not None:
+                write_actuation(global_vars, key, default, "auto", do_print=False)
         print(f"[GUIHandler] stopped")
+        
 
 
 def main():
@@ -319,13 +313,14 @@ if __name__ == '__main__':
     main()
 
 '''
+
 COMPLETED:
-    write_actuator called when actuator key is received in peripheral_worker
-        Abort and shutdown peripheral logic
-    Sequences supported by buttons, switches, and selectors
-    Open Source License
-    Moved write_actuators, abort, unabort, and shutdown to utility. Renamed utility to midgard_functions. Created global_vars tuple to pass global variables to operating functions and sequences
-    
+    Completed function logic for buttons, switches, and selectors
+    OpenMCT on multiple machines (OpenMCT now checks which keys are pressed)
+    Install OpenMCT on first run, checks that openmct folder is actually openmct, checks for updates
+    Parent file from other manufacturer
+    Add inhibited view state to GUI (dark gray)
+
 
 TO DO
     Bugs
@@ -339,26 +334,27 @@ TO DO
             Check that no peripherals in python are using the same external device 
             Check that all the members of s sync group have the same values (except name, id, description, etc)
             Check sequences use a supported control_type
-        Parent file from other manufacturer
+            Check that actuators have no buttons in armed_by and disarmed_by
+            Check that states only have other states in their selector in transition_to
         Armed and disarmed from another peripheral
     Overseer
         Restart of MIDGARD or peripheral handling
         Peripheral communication
-        Install OpenMCT on first run (build_openmct.sh but thru python instead of bash)
     GUI
         Add cluster control_type
-        Add inhibited view state
-        Terminal Display
-        Features
+        Restart frontend while python is running?
+        Plugins
             Servo Alignment
-            Restart frontend while python is running?
+            Map (Geofence and Course)
+            Fuel Bar
+            Terminal Display
     Data Handling
         Recieving data from peripherals
         Data priority (bypass, gpio 24/25, diagnostics, etc)
         Import csv logs into database
     Actuator Control
         Actuating radio peripherals
-        Add servo and cluster support to sequences
+        Add servo and cluster support to functions
     Writing
         Readme
         How to
@@ -367,7 +363,7 @@ TO DO
         NI
         LabJack
     Other Peripherals
-        MAVLink
+        MAVLink / Ardupilot / Q Ground Control / Mission Planner / PX4 / MavProxy
         KSP (KSP OpenMCT and Telemachus Reborn https://gitlab.com/overloader-ksp/kerbal-telemetry)
         Ansys STK
         Basilisk (BSK)

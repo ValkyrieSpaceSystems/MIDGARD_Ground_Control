@@ -1,4 +1,4 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error
 import numpy as np
 from queue import Queue, Empty, Full
 from datetime import datetime, UTC
@@ -45,17 +45,75 @@ def combine_with_and(items, oxford_comma=True):
 def label(raw):
     return raw.replace('_', ' ').title()
 
+def run(command, cwd=None, check=True, shell=False):
+    """Run a command and stop if it fails."""
+    print(f"\n> {' '.join(command)}")
+    subprocess.run(command, cwd=cwd, check=check, shell=shell)
+
+def check_and_install_openmct(openmct_dir):
+    # Check if there is an OpenMCT directory
+    if os.path.isdir(openmct_dir):
+        # Check if package.json exists
+        package_path = os.path.join(openmct_dir, "package.json")
+        if not os.path.isfile(package_path):
+            raise FileNotFoundError(f"OpenMCT Directory is not not complete: package.json does not exist: {package_path}")
+
+        # Read package.json
+        with open(package_path, "r", encoding="utf-8") as file:
+            package = json.load(file)
+            # Check if the package name is "openmct"
+            if package.get("name") != "openmct": 
+                raise ValueError(f'OpenMCT Directory is not OpenMCT: {package.get("name")!r}')
+            installed_version = f'v{package.get("version")}'
+            
+            headers = {
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "latest-github-version-script",
+            }
+            token = os.environ.get("GITHUB_TOKEN")
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+        
+            req = urllib.request.Request(f"https://api.github.com/repos/nasa/openmct/releases/latest", headers=headers)
+            with urllib.request.urlopen(req) as response:
+                latest_version = json.loads(response.read().decode()).get("tag_name")
+                if latest_version != installed_version:
+                    print(installed_version)
+                    print(f"[Install OpenMCT] new version of OpenMCT available [{latest_version}]. To install, delete openmct folder and restart")
+
+    else:
+        # Install OpenMCT
+        try:
+            if shutil.which('git') is None:
+                raise RuntimeError("Git is not installed or is not available in PATH.")
+            if shutil.which("node") is None:
+                raise RuntimeError("Node.js is not installed. Install Node.js 24+ from https://nodejs.org/en/download and run this again.")
+            if shutil.which("npm") is None:
+                raise RuntimeError("npm is not installed or is not available in PATH.")
+            
+            print(f"[Install OpenMCT] OpenMCT directory not found. Installing OpenMCT at {str(openmct_dir)}")
+            
+            run(["git", "clone", "https://github.com/nasa/openmct.git", str(openmct_dir)])
+            run(["npm", "install"], cwd=openmct_dir)
+            run(["npm", "audit", "fix"], cwd=openmct_dir, check=False)
+            run(["npm", "run", "build"], cwd=openmct_dir)
+            
+            print(f"[Install OpenMCT] OpenMCT directory not found. OpenMCT installed at {str(openmct_dir)}")
+            
+        except Exception as e:
+            _, _, tb = sys.exc_info()
+            shutil.rmtree(openmct_dir)
+            print(f"[Install OpenMCT] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
 
 # Operating Functions
 def check_configs(global_vars):
     pass
 
-def write_actuation(global_vars, key, requested, source, do_print=True, pressed=True, missing_keys=[], bypass_checks=False):
-    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
+def write_actuation(global_vars, key, requested, source, missing_keys=None, do_print=True, bypass_checks=False):
+    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_db, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
     
     element = get_element(data_tree, key)
-    func_args = (global_vars, element)
     
     try:
         if not stop_event.is_set():
@@ -72,26 +130,33 @@ def write_actuation(global_vars, key, requested, source, do_print=True, pressed=
             if element.control_type == "selector":
                 current_state = element.states_index[element.value]
                 requested_state = element.states_index[requested]
-                valid_source = True if source in requested_state.sources or requested_state.sources == [] else False
-                valid_transition = True if requested_state in current_state.transition_to else False
-                inhibited = any(not bool(elem.value) for elem in requested_state.armed_by) or any(bool(elem.value) for elem in requested_state.disarmed_by)
+                source_authorized = True if source in requested_state.sources or requested_state.sources == [] else False
+                transition_allowed = True if requested_state in current_state.transition_to else False
+                interlocked = any(not bool(elem.value) for elem in requested_state.armed_by) or any(bool(elem.value) for elem in requested_state.disarmed_by)
             else:
-                valid_transition = True
-                valid_source = True if source in element.sources or element.sources == [] else False
-                inhibited = any(not bool(elem.value) for elem in element.armed_by) or any(bool(elem.value) for elem in element.disarmed_by)
+                transition_allowed = True
+                source_authorized = True if source in element.sources or element.sources == [] else False
+                interlocked = any(not bool(elem.value) for elem in element.armed_by) or any(bool(elem.value) for elem in element.disarmed_by)
+            
+            if source == 'user' and missing_keys != []:
+                confirmation_keys_pressed = False
+            else:
+                confirmation_keys_pressed = True
                 
             if bypass_checks:
-                pressed = True
-                valid_source = True
-                valid_transition = True
-                inhibited = False
+                source_authorized = True
+                transition_allowed = True
+                interlocked = False
+                confirmation_keys_pressed = True
             
-            if not pressed or not valid_source or not valid_transition: # Stay the same
+            run_sequence = False
+            if not confirmation_keys_pressed or not source_authorized or not transition_allowed: # Stay the same
                 value = element.value
-            elif inhibited: # Nominalize
+            elif interlocked: # Nominalize
                 value = element.nominal
             else: # Actuate
                 value = requested
+                run_sequence = True
                 
                 
             # Sync Groups
@@ -114,62 +179,100 @@ def write_actuation(global_vars, key, requested, source, do_print=True, pressed=
                         to_actuate.append(elem)
                     
                     
-            # Normalization
-            if value == True:
-                affect_array = element.disarms
-            elif value == False:
-                affect_array = element.arms
-            elif element.control_type == 'selector':
-                affect_array = element.states_index[value].disarms + element.states_index[element.value].arms 
-                
-            to_nominalize = [elem for elem in affect_array if elem.value == True and elem.control_type != 'button'] # list of all switches to nominalize with this switches actuation
-                
-            if to_nominalize:
-                prop_complete = False
-                while not prop_complete: # this populates the to_nominalize array with all the elements to be nominalized by the nominalizing of all the elements already in to_nominalize
-                    start = to_nominalize
-                    for e in to_nominalize:
-                        to_nominalize = to_nominalize + [elem for elem in e.arms if elem not in to_nominalize and elem.value == True and elem.control_type != 'button']
-                    if to_nominalize == start: prop_complete = True                    
-                for elem in to_nominalize: # Nominalize the elements
-                    if elem.element_class == 'State':
-                        par = elem.parent
-                        telemetry.send(int(time.time() * 1000), par.key, par.nominal, data_tree, source, immediate=True)
-                        to_actuate.append(par)
-                    else:
-                        telemetry.send(int(time.time() * 1000), elem.key, elem.nominal, data_tree, source, immediate=True)
-                        to_actuate.append(elem)
-                        
-                    if elem.function_type == 'sequence' and element.control_type == 'switch':
-                        element.func(*func_args)
-                    elif elem.function_type == 'thread':
-                        elem.stop_event.set()
-                        if elem.thread != None:
-                            elem.thread.join()
-                            threads.remove((elem.name, elem.thread))
-                            elem.thread = None
-                
-                
-            # Triggers and Sequences
-            if element.function_type == "sequence" and element.control_type == 'switch' and pressed and not inhibited and valid_source:
-                element.func(*func_args)
-            elif element.function_type == 'thread':
+            # Inhibiting
+            nominalize_array = []
+            uninhibit_array = []
+            if element.control_type == "selector":
+                nominalize_array = element.states_index[value].disarms + element.states_index[element.value].arms 
+                uninhibit_array = element.states_index[element.value].disarms + element.states_index[value].arms 
+            elif element.control_type == "switch":
                 if value:
-                    element.stop_event.clear()
-                    if element.thread == None:
-                        element.thread = threading.Thread(target=element.func, args=func_args, daemon=True)
-                        element.thread.start()
-                        threads.append((element.name, element.thread))
+                    nominalize_array = element.disarms
+                    uninhibit_array = element.arms
                 else:
-                    element.stop_event.set()
-                    if element.thread != None:
-                        element.thread.join()
-                        threads.remove((element.name, element.thread))
-                        element.thread = None
+                    nominalize_array = element.arms
+                    uninhibit_array = element.disarms
+                    
+                    
+            # Write to GUI
+            telemetry.send(int(time.time() * 1000), element.key, value, data_tree, source, inhibited=interlocked or not transition_allowed,immediate=True) # Need to update the element first so other elements can check the element's new value
+            to_actuate.append(element)
+                
+            to_nominalize = []
+            if nominalize_array:
+                prop_complete = False
+                while not prop_complete: # this populates the nominalize_array array with all the elements to be nominalized by the nominalizing of all the elements already in nominalize_array
+                    start = nominalize_array
+                    for e in nominalize_array:
+                        nominalize_array = nominalize_array + [elem for elem in e.arms if elem not in nominalize_array and elem.value == True and elem.control_type != 'button']
+                    if nominalize_array == start: prop_complete = True 
+                
+                to_nominalize = [elem for elem in nominalize_array if elem.value == True and elem.element_class != 'State' and elem.control_type != 'button'] + [elem.parent for elem in nominalize_array if elem.element_class == 'State' and elem.parent]
+                to_nominalize = list(dict.fromkeys(to_nominalize))
+                for elem in nominalize_array: # Nominalize the elements
+                    if elem.element_class == 'State': # Selector logic
+                        par = elem.parent
+                        if par.states_index[par.nominal] in par.states_index[par.value].transition_to: # Checks if transition is valid
+                            telemetry.send(int(time.time() * 1000), par.key, par.nominal, data_tree, source, immediate=True)
+                            
+                            if hasattr(par, 'function_type'):
+                                if par.states_index[par.nominal] in par.function_states or par.function_states == []: # nominal state not inhibited
+                                    if par.function_type == 'sequence' and par.run_on_nominalize: 
+                                        par.func(global_vars, par)
+                                    elif par.function_type == 'thread' and par.run_on_nominalize: 
+                                        element.stop_event.clear()
+                                        if element.thread == None:
+                                            element.thread = threading.Thread(target=element.func, args=(global_vars, element), daemon=True)
+                                            element.thread.start()
+                                            threads.append((element.name, element.thread))
+                                else: 
+                                    if par.function_type == 'thread':
+                                        par.stop_event.set()
+                                        if par.thread != None:
+                                            par.thread.join()
+                                            threads.remove((par.name, par.thread))
+                                            par.thread = None
+                    else:
+                        telemetry.send(int(time.time() * 1000), elem.key, elem.nominal, data_tree, source, inhibited=True, immediate=True)
+                        if elem.control_type in ['switch']: # only switches should always change on nominalization (selector logic above)
+                            to_actuate.append(elem)
+                            if hasattr(elem, 'function_type'):
+                                if elem.function_type == 'sequence':
+                                    elem.func(global_vars, element)
+                                elif elem.function_type == 'thread':
+                                    elem.stop_event.set()
+                                    if elem.thread != None:
+                                        elem.thread.join()
+                                        threads.remove((elem.name, elem.thread))
+                                        elem.thread = None
+            
+            if uninhibit_array: # Uninhibit the elements
+                for elem in uninhibit_array:
+                    if elem.element_class == "State":
+                        telemetry.send(int(time.time() * 1000), elem.parent.key, elem.parent.value, data_tree, source, immediate=True) # Just updating the selector because selector inhibit logic in telemetry.send
+                    else:
+                        elem_interlocked = any(not bool(e.value) for e in elem.armed_by) or any(bool(e.value) for e in elem.disarmed_by)
+                        telemetry.send(int(time.time() * 1000), elem.key, elem.nominal, data_tree, source, inhibited=elem_interlocked, immediate=True)
 
             
-            telemetry.send(int(time.time() * 1000), element.key, value, data_tree, source, immediate=True)
-            to_actuate.append(element)
+            # Triggers and Sequences
+            if hasattr(element, 'function_type'):
+                if (element.control_type == 'selector' and (element.states_index[value] in element.function_states or element.function_states == [])) or (element.control_type != 'selector' and value): # If selector with a valid state or no valid states (ie all states) or if not selector and value
+                    if element.function_type == "sequence" and run_sequence: # regular sequences will run every actuation, sequence must check the element value
+                        element.func(global_vars, element)
+                    elif element.function_type == 'thread':
+                        element.stop_event.clear()
+                        if element.thread == None:
+                            element.thread = threading.Thread(target=element.func, args=(global_vars, element), daemon=True)
+                            element.thread.start()
+                            threads.append((element.name, element.thread))
+                else:
+                    if element.function_type == 'thread':
+                        element.stop_event.set()
+                        if element.thread != None:
+                            element.thread.join()
+                            threads.remove((element.name, element.thread))
+                            element.thread = None
             
             
             # Physical Actuation
@@ -177,7 +280,7 @@ def write_actuation(global_vars, key, requested, source, do_print=True, pressed=
             ni_peripherals = []
             for elem in to_actuate:
                 if source == 'peripheral' and element.parent != elem.parent: # if a peripheral calls an actuation, midgard will ignore the elements in to_actuate and rely on the peripheral to make those actuations with midgard needing to instruct them
-                    if elem.type in ['valve','ssr','servo','pyro']:
+                    if elem.type in ['valve','ssr','servo','pyro']: # if physical actuator
                         if elem.parent.manufacturer == "VSS":
                             pass
                         elif elem.parent.manufacturer == "NI":
@@ -198,7 +301,7 @@ def write_actuation(global_vars, key, requested, source, do_print=True, pressed=
                 if to_nominalize:
                     print(f'{element.name} now inhibiting and setting nominal {[elem.name for elem in to_nominalize]}')
                     
-                if pressed and valid_source and valid_transition:
+                if source_authorized and transition_allowed and confirmation_keys_pressed:
                     if element.control_type == "switch":
                         if element.value == False:
                             display_value = element.nominal_state
@@ -206,29 +309,31 @@ def write_actuation(global_vars, key, requested, source, do_print=True, pressed=
                             display_value = element.off_nominal_state
                     elif element.control_type == "selector":
                         display_value = element.states_name[value]
-                        inhibited = any(not bool(elem.value) for elem in requested_state.armed_by) or any(bool(elem.value) for elem in requested_state.disarmed_by)
                     else:
                         display_value = value
                         
                     if element.control_type == "button":
-                        control_type_display = f"triggered"
+                        if interlocked: 
+                            control_type_display = f"not triggered"
+                        else:
+                            control_type_display = f"triggered"
                     elif element.type == "sequence":
                         control_type_display = f"{display_value}"
                     else:
                         control_type_display = f"set to {display_value}"
                                             
-                    if not inhibited:
+                    if not interlocked:
                         print(f"{element.name} {control_type_display}")
-                    elif inhibited:
+                    elif interlocked:
                         if element.control_type == 'selector':
                             blocked = [elem.name for elem in requested_state.armed_by if elem.value == False] + [elem.name for elem in requested_state.disarmed_by if elem.value == True]  # A list of all inhbiiting elements
                         else:
                             blocked = [elem.name for elem in element.armed_by if elem.value == False] + [elem.name for elem in element.disarmed_by if elem.value == True]  # A list of all inhbiiting elements
-                        print(f"{element.name} {control_type_display}. Inhibited by {blocked}")
+                        print(f"{element.name} {control_type_display}. Interlocked by {blocked}")
                 
                 else: 
                     reasons = []
-                    if not pressed: # Confirmation keys not pressed
+                    if not confirmation_keys_pressed: # Confirmation keys not pressed
                         missing_key_names = []
                         for k in missing_keys:
                             if isinstance(k, str):
@@ -239,13 +344,13 @@ def write_actuation(global_vars, key, requested, source, do_print=True, pressed=
                         reasons.append(f"{missing_key_names} not pressed")
                     
                     if element.control_type == 'selector':
-                        if not valid_source:
+                        if not source_authorized:
                             reasons.append(f"{source} not valid source {requested_state.sources}")
                             
-                        if not valid_transition:
+                        if not transition_allowed:
                             reasons.append(f"{requested_state.name} not valid transition {[s.name for s in current_state.transition_to]}")
                     else:
-                        if not valid_source:
+                        if not source_authorized:
                             reasons.append(f"{source} not valid source {element.sources}")
                         
                     print(f"{element.name} command ignored because {combine_with_and(reasons)}")
@@ -256,7 +361,7 @@ def write_actuation(global_vars, key, requested, source, do_print=True, pressed=
         print(f"{element.name} Write Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
 def abort(global_vars, cause='', verbose_cause=True, verbose_abort=True): # A digital abort exists, but cant be activated without an 'abort' switch (except during shutdown)
-    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
+    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_db, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
     
     if not abort_state.is_set():
         try: 
@@ -282,7 +387,7 @@ def abort(global_vars, cause='', verbose_cause=True, verbose_abort=True): # A di
             print(f"Abort Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
 def unabort(global_vars, verbose=True): 
-    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
+    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_db, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
     
     if abort_state.is_set():
         if verbose:
@@ -290,7 +395,7 @@ def unabort(global_vars, verbose=True):
         abort_state.clear() # This just unsets the abort_state event
 
 def shutdown(global_vars, do_abort=True):
-    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
+    debug_mode, show_server_logs, simulated_data, log_data, log_actuations, print_switch_changes, keep_db, keep_csv, openmct_dir, log_output_dir, confirmation_keys, peripherals, threads, servers, stop_event, abort_state, non_abort_shutdown, startup_event, sync_groups, data_tree, all_keys, openmct, telemetry = global_vars
     
     print("\n\n\nStopping MIDGARD...")
     stop_event.set() # Runs this to stop everything else from running and to enable the shutdown process
@@ -339,7 +444,7 @@ def shutdown(global_vars, do_abort=True):
                     
         
         for name, server in servers: # stops all running threads (runs after closing ni tasks because threads call ni tasks while running, would cause an error if reversed order)
-            server.stop(delete_db=True)
+            server.stop(delete_db=not keep_db)
             if server.is_running:
                 print(f"[Shutdown] Warning: {name} server did not stop cleanly")
                 safe = False
