@@ -41,13 +41,6 @@ type = "switch"
 sync_group = "logging"
 default = false
 
-# ── Terminal ───────────────────────────────────────────────────────────
-#[[actuator]]
-#id = "terminal_log"
-#name = "Terminal"
-#description = "Displays the python terminal in OpenMCT"
-#type = "message"
-
 # ── Phases ─────────────────────────────────────────────────────────────
 [[actuator]]
 id = "flight_phase"

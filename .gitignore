@@ -4,3 +4,5 @@ openmct
 **/__pycache__/**
 logs
 /__pycache__
+telemetry.db-shm
+telemetry.db-wal

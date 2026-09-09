@@ -1,4 +1,4 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket
 import numpy as np
 from queue import PriorityQueue, Queue, Empty, Full
 from datetime import datetime, UTC
@@ -15,7 +15,7 @@ import nidaqmx.system
 from labjack import ljm
 import Basilisk
 
-from midgard_functions import gv, print_out, error_out, get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, write_actuation, abort, unabort, shutdown
+from midgard_functions import gv, print_out, get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, check_peripherals, write_actuation, abort, unabort, shutdown
 
 
 def _safe_key(*parts):
@@ -161,7 +161,7 @@ def buildOpenMCTjs(output_path=None): # CANNOT USE print_out
     with open(output_path, "w") as f:
         f.write(js)
 
-    #print(data_tree, all_keys)
+    #print_out(data_tree, all_keys)
     gv.data_tree = data_tree 
     gv.all_keys = all_keys
 
@@ -183,7 +183,7 @@ class OpenMCTServer:
             @self.app.middleware("http")
             async def _log_requests(request, call_next, _tag=self.__class__.__name__):
                 response = await call_next(request)
-                print(f"[{_tag}] {request.method} {request.url.path} -> {response.status_code}")
+                print_out(f"[{_tag}] {request.method} {request.url.path} -> {response.status_code}")
                 return response
         self.app.add_middleware(
             CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
@@ -196,7 +196,7 @@ class OpenMCTServer:
 
     def start(self):
         if self.is_running:
-            print("[OpenMCTServer] is already running.")
+            print_out("[OpenMCTServer] is already running.")
             return
                             
         config = uvicorn.Config(
@@ -217,18 +217,18 @@ class OpenMCTServer:
         while not getattr(self._server, "started", False):
             time.sleep(0.01)
 
-        print(f"[OpenMCTServer] started on port {self.port}")
+        print_out(f"[OpenMCTServer] started on port {self.port}")
 
     def stop(self, delete_db=False):
         if not self.is_running:
-            print("[OpenMCTServer] is not running.")
+            print_out("[OpenMCTServer] is not running.")
             return
 
         self._server.should_exit = True
         self._thread.join(timeout=5)
         self._server = None
         self._thread = None
-        print("[OpenMCTServer] stopped.")
+        print_out("[OpenMCTServer] stopped.")
 
     def restart(self):
         self.stop()
@@ -264,23 +264,23 @@ class TelemetryServer:
         self._flush_stop = None
         self._flush_log_thread = None
         self._flush_log_stop = None
+        
+        self._clients = []      # connected WebSocket objects
+        self._loop = None       # asyncio loop running inside the server thread
+        self._server = None     # uvicorn.Server instance, used to request shutdown
+        self._thread = None
+        self.command_queue = Queue()
 
         self.app = FastAPI()
         if self.show_logs:
             @self.app.middleware("http")
             async def _log_requests(request, call_next, _tag=self.__class__.__name__):
                 response = await call_next(request)
-                print(f"[{_tag}] {request.method} {request.url.path} -> {response.status_code}")
+                print_out(f"[{_tag}] {request.method} {request.url.path} -> {response.status_code}")
                 return response
         self.app.add_middleware(
             CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
         )
-
-        self._clients = []      # connected WebSocket objects
-        self._loop = None       # asyncio loop running inside the server thread
-        self._server = None     # uvicorn.Server instance, used to request shutdown
-        self._thread = None
-        self.command_queue = Queue()
 
         self._init_db()
         self._register_routes()
@@ -345,7 +345,7 @@ class TelemetryServer:
             await websocket.accept()
             self._clients.append(websocket)
             if self.show_logs:
-                print(f"[TelemetryServer] client connected ({len(self._clients)} clients)")
+                print_out(f"[TelemetryServer] client connected ({len(self._clients)} clients)")
             try:
                 while True:
                     raw = await websocket.receive_text()
@@ -362,7 +362,7 @@ class TelemetryServer:
                 if websocket in self._clients:
                     self._clients.remove(websocket)
                 if self.show_logs:
-                    print(f"[TelemetryServer] client disconnected ({len(self._clients)} clients)")
+                    print_out(f"[TelemetryServer] client disconnected ({len(self._clients)} clients)")
 
     # ---------------- logging ----------------
     
@@ -384,8 +384,7 @@ class TelemetryServer:
         try:
             if not self.logging:
                 self.logging = True
-                self.csv_path = os.path.join(self.log_output_dir,f"{time.strftime("%Y-%m-%d_%H-%M-%S")}.csv") if self.log_output_dir is not None else os.path.join(os.path.dirname(__file__), "logs", f"{time.strftime("%Y-%m-%d_%H-%M-%S")}.csv")
-                self.csv_files.append(self.csv_path)
+                self.csv_path = os.path.join(self.log_output_dir,f"{time.strftime("%Y-%m-%d_%H-%M-%S")}.csv")
                 
                 header = ["unix_time_ns", "key", "value", "source", "inhibited"]
                 self.csv_file = open(f'{self.csv_path}', 'a', newline='', buffering=1<<16)
@@ -397,14 +396,14 @@ class TelemetryServer:
                     self._flush_log_thread = threading.Thread(target=self._flush_log_loop, daemon=True)
                     self._flush_log_thread.start()
         
-                print(f"[Logging] File Started: {self.csv_path}")
+                print_out(f"[Logging] File Started: {self.csv_path}")
                 
             else:
-                print('[Logging] already running')
+                print_out('[Logging] already running')
                 
         except Exception as e:
             _, _, tb = sys.exc_info()
-            print(f"[Logging] Start Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[Logging] Start Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
     
     def stop_logging(self):
         try:
@@ -422,15 +421,12 @@ class TelemetryServer:
                 
         except Exception as e:
             _, _, tb = sys.exc_info()
-            print(f"[Logging] Stop Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[Logging] Stop Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
     # ---------------- publish data ----------------
 
     def send(self, utc: int, key: str, value, element, source: str, inhibited=False, immediate=False, push_to_gui=True):
         try:
-            if not self.is_running:
-                print('[TelemetryServer] Cannot send data because server is not running')
-            
             if isinstance(value, bool):
                 value = int(value)
             
@@ -454,7 +450,7 @@ class TelemetryServer:
                             self.csv_writer.writerow((utc, key, value, source, inhibited))
                 except Exception as e:
                     _, _, tb = sys.exc_info()
-                    print(f"[TelemetryServer] Push Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+                    print_out(f"[TelemetryServer] Push Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
             
             if element != None:
                 if element.element_class == 'Actuator':
@@ -473,7 +469,7 @@ class TelemetryServer:
             
         except Exception as e:
             _, _, tb = sys.exc_info()
-            print(f"[TelemetryServer] Send Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[TelemetryServer] Send Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
 
     async def _broadcast(self, key, value, utc, source=None, inhibited=None):
@@ -490,7 +486,7 @@ class TelemetryServer:
     def start(self):
         try:
             if self.is_running:
-                print("[TelemetryServer] is already running.")
+                print_out("[TelemetryServer] is already running.")
                 return
 
             config = uvicorn.Config(
@@ -517,16 +513,16 @@ class TelemetryServer:
                 self._flush_thread = threading.Thread(target=self._flush_loop, daemon=True)
                 self._flush_thread.start()
 
-            print(f"[TelemetryServer] started on port {self.port}")
+            print_out(f"[TelemetryServer] started on port {self.port}")
             
         except Exception as e:
             _, _, tb = sys.exc_info()
-            print(f"[TelemetryServer] Start Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[TelemetryServer] Start Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
     def stop(self, delete_db=False):
         try:
             if not self.is_running:
-                print("[TelemetryServer] is not running.")
+                print_out("[TelemetryServer] is not running.")
                 return
 
             if self._flush_thread:
@@ -546,11 +542,11 @@ class TelemetryServer:
             if delete_db and os.path.exists(self.db_path):
                 os.remove(self.db_path)
             
-            print("[TelemetryServer] stopped.")
+            print_out("[TelemetryServer] stopped.")
             
         except Exception as e:
             _, _, tb = sys.exc_info()
-            print(f"[TelemetryServer] Stop Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[TelemetryServer] Stop Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
     def restart(self):
         self.stop()

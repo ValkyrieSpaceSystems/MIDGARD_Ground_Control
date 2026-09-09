@@ -1,4 +1,4 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket
 import numpy as np
 from queue import PriorityQueue, Queue, Empty, Full
 from datetime import datetime, UTC
@@ -17,19 +17,21 @@ import Basilisk
 
 class global_vars():
     def __init__(self):
-        self.debug_mode: bool = False
-        self.show_server_logs: bool = False
-        self.simulated_data: bool = False
         self.log_data: bool = True
         self.log_actuations: bool = True
-        self.print_switch_changes: bool = True
+        self.simulated_data: bool = False
         self.keep_db: bool = True
-        self.keep_csv: bool = True
-        self.openmct_dir: str = ''
+        self.keep_logs: bool = True
         self.log_output_dir: str = ''
-        self.confirmation_keys: list[str] = []
+        self.print_actuations: bool = True
+        self.show_server_logs: bool = False
         self.openmct_port: int = 4000
         self.telemetry_port: int = 4001
+        self.confirmation_keys: list[str] = []
+        self.debug_mode: bool = False
+        self.health_check_interval = 2
+        self.openmct_dir: str = ''
+        
         self.peripherals = {}
         
         self.threads = []
@@ -48,22 +50,16 @@ class global_vars():
         
 gv = global_vars()
 
-# Helper Functions
+# Helper Functions (Basic)
 def print_out(msg):
     try:
         print(msg)
-        gv.telemetry.send(int(time.time() * 1000), 'terminal_log', msg, None, source="sequence")
+        if gv.telemetry is not None:
+            if gv.telemetry.is_running:
+                gv.telemetry.send(int(time.time() * 1000), 'terminal_log', msg, None, source="sequence")
     except Exception as e:
         _, _, tb = sys.exc_info()
-        error_out(type(e)(f"Print Out Error: {type(e).__name__} on line {tb.tb_lineno}: {e}"))
-
-def error_out(error):
-    try:
-        gv.telemetry.send(int(time.time() * 1000), 'terminal_log', error, None, source="sequence")
-    except Exception as e:
-        _, _, tb = sys.exc_info()
-        print_out(f"Error Out Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
-    raise error
+        raise type(e)(f"[PrintOut] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
 def get_element(data_tree, key, default=None):
     current = data_tree
@@ -72,61 +68,141 @@ def get_element(data_tree, key, default=None):
             current = current[key_part]
         else:
             return default
-    #print(current)
+    #print_out(current)
     return current
 
-def combine_with_and(items, oxford_comma=True):
+def combine_with_and(items, use_or=False, oxford_comma=True):
     items = list(items)
+    
+    if use_or:
+        andor = 'or'
+    else:
+        andor = 'and'
 
     if not items:
         return ""
     if len(items) == 1:
         return items[0]
     if len(items) == 2:
-        return f"{items[0]} and {items[1]}"
+        return f"{items[0]} {andor} {items[1]}"
 
     *head, last = items
     sep = "," if oxford_comma else ""
-    return f"{', '.join(head)}{sep} and {last}"
+    return f"{', '.join(head)}{sep} {andor} {last}"
     
 def label(raw):
     return raw.replace('_', ' ').title()
 
-def run(command, cwd=None, check=True, shell=False): # CANNOT USE print_out
+def run(command, cwd=None, check=True, shell=False): 
     """Run a command and stop if it fails."""
-    print(f"\n> {' '.join(command)}")
+    print_out(f"\n> {' '.join(command)}")
     subprocess.run(command, cwd=cwd, check=check, shell=shell)
 
-def check_and_install_openmct(): # CANNOT USE print_out
-    # Check if there is an OpenMCT directory
-    if os.path.isdir(gv.openmct_dir):
-        # Check if package.json exists
-        package_path = os.path.join(gv.openmct_dir, "package.json")
-        if not os.path.isfile(package_path):
-            raise FileNotFoundError(f"OpenMCT Directory is not not complete: package.json does not exist: {package_path}")
 
-        # Read package.json
-        with open(package_path, "r", encoding="utf-8") as file:
-            package = json.load(file)
-            # Check if the package name is "openmct"
-            if package.get("name") != "openmct": 
-                raise ValueError(f'OpenMCT Directory is not OpenMCT: {package.get("name")!r}')
-            installed_version = f'v{package.get("version")}'
-            
-            headers = {
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "latest-github-version-script",
-            }
-            token = os.environ.get("GITHUB_TOKEN")
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
+# Operating Functions (Complex)
+def check_configs(): # check that all config variables are the correct format with acceptable values
+    try:
+        issues = []
+        warnings = []
         
-            req = urllib.request.Request(f"https://api.github.com/repos/nasa/openmct/releases/latest", headers=headers)
-            with urllib.request.urlopen(req) as response:
-                latest_version = json.loads(response.read().decode()).get("tag_name")
-                if latest_version != installed_version:
-                    print(installed_version)
-                    print(f"[Install OpenMCT] new version of OpenMCT available [{latest_version}]. To install, delete openmct folder and restart")
+        convars = {
+            'log_data': {'var': gv.log_data, 'type': [bool], 'warning':{'val': [False], 'msg': 'Data not logged to file.'},},
+            'log_actuations': {'var': gv.log_actuations, 'type': [bool], 'warning':{'val': [False], 'msg': 'Actuations not logged to file.'},},
+            'simulated_data': {'var': gv.simulated_data, 'type': [bool], 'warning':{'val': [True], 'msg': 'Simulated data in use. Real data ignored.'},},
+            'keep_db': {'var': gv.keep_db, 'type': [bool], 'warning':{'val': [False], 'msg': 'Telemetry database removed after run. No data backup after closing.'},},
+            'keep_logs': {'var': gv.keep_logs, 'type': [bool], 'warning':{'val': [False], 'msg': 'Log file removed after run. No log data after closing.'},},
+            'log_output_dir': {'var': gv.log_output_dir, 'type': [str], 'subtype': 'dir',},
+            'print_actuations': {'var': gv.print_actuations, 'type': [bool], 'warning':{'val': [False], 'msg': 'Actuations not output to terminal.'},},
+            'show_server_logs': {'var': gv.show_server_logs, 'type': [bool],},
+            'openmct_port': {'var': gv.openmct_port, 'type': [int], 'subtype': 'port',},
+            'telemetry_port': {'var': gv.telemetry_port, 'type': [int], 'subtype': 'port',},
+            'confirmation_keys': {'var': gv.confirmation_keys, 'type': [list], 'subtype': [str]},
+            'debug_mode': {'var': gv.debug_mode, 'type': [bool], 'warning':{'val': [True], 'msg': 'Debug Mode enabled. Normally restricted operations are now possible'},},
+            'health_check_interval': {'var': gv.health_check_interval, 'type': [int,float],},
+            'openmct_dir': {'var': gv.openmct_dir, 'type': [str], 'subtype': 'dir',},
+        }
+        
+        for cv, cvars in convars.items():
+            # Config Variable Types
+            if type(cvars['var']) not in cvars['type']: 
+                issues.append(f"TypeError: {cv} variable '{cvars['var']}' is a {type(cvars['var'])}. Must be {combine_with_and([t.__name__ for t in cvars['type']],use_or=True)}")
+            if 'subtype' in cvars:
+                if type(cvars['var']) == list:
+                    for sub in cvars['var']:
+                        if type(sub) not in cvars['subtype']: 
+                            issues.append(f"TypeError: {cv} variable content '{sub}' is a {type(sub)}. Must be {combine_with_and([t.__name__ for t in cvars['subtype']],use_or=True)}")
+                        
+            # Config Variable Values
+            if 'subtype' in cvars:
+                if cvars['subtype'] == 'dir': # check directory exists or make it and is writeable
+                    if os.path.isdir(os.path.abspath(cvars['var'])): # if it already exists
+                        pass
+                    else:
+                        parent = os.path.abspath(cvars['var'])
+                        while not os.path.exists(parent):
+                            parent = os.path.dirname(parent)
+                        if os.path.isdir(parent) and os.access(parent, os.W_OK): # checks if the parent is writeable
+                            os.makedirs(os.path.abspath(cvars['var']), exist_ok=True)
+                        else:
+                            issues.append(f"Cannot create directory: {os.path.abspath(cvars['var'])}")
+                elif cvars['subtype'] == 'port': # check port is open
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                        try:
+                            sock.bind(("127.0.0.1",cvars['var']))
+                        except OSError:
+                            issues.append(f"OSError: {cv} variable '{cvars['var']}' port already in use")
+            if 'warning' in cvars:
+                if cvars['var'] in cvars['warning']['val']:
+                    warnings.append(f"{cv} variable value is {cvars['var']}. {cvars['warning']['msg']}")
+
+        # Raise issues
+        if warnings != []:
+            print_out(f'\nWARNING, WARNING, WARNING\n\n{"\n\n".join(warnings)}\n\nWARNING, WARNING, WARNING\n\n')
+        if issues != []:
+            raise Exception("\n"+"\n\n".join(issues))
+        if issues == [] and warnings == []:
+            print_out(f'Config variable check passed successfully')
+            
+    except Exception as e:
+        _, _, tb = sys.exc_info()
+        raise type(e)(f"[CheckConfig] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+    
+def check_and_install_openmct(): # check that openmct is installedp properly and install it if it isnt installed already
+    # Check if there is an OpenMCT directory
+    if os.listdir(gv.openmct_dir): # Check if openmct folder has items inside
+        try:
+            package_path = os.path.join(gv.openmct_dir, "package.json") 
+            if not os.path.isfile(package_path): # Check if package.json existst
+                raise FileNotFoundError(f"OpenMCT Directory is not not complete: package.json does not exist: {package_path}")
+
+            # Read package.json
+            with open(package_path, "r", encoding="utf-8") as file:
+                package = json.load(file)
+                # Check if the package name is "openmct"
+                if package.get("name") != "openmct": 
+                    raise ValueError(f'OpenMCT Directory is not OpenMCT: {package.get("name")!r}')
+                installed_version = f'v{package.get("version")}'
+                
+                headers = {
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "latest-github-version-script",
+                }
+                token = os.environ.get("GITHUB_TOKEN")
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+            
+                req = urllib.request.Request(f"https://api.github.com/repos/nasa/openmct/releases/latest", headers=headers)
+                with urllib.request.urlopen(req) as response:
+                    latest_version = json.loads(response.read().decode()).get("tag_name")
+                    if latest_version != installed_version:
+                        print_out(installed_version)
+                        print_out(f"[InstallOpenMCT] new version of OpenMCT available [{latest_version}]. To install, delete openmct folder and restart")
+        
+        except urllib.error.URLError:
+            pass
+        except Exception as e:
+            _, _, tb = sys.exc_info()
+            raise type(e)(f"[InstallOpenMCT] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
     else:
         # Install OpenMCT
@@ -138,24 +214,28 @@ def check_and_install_openmct(): # CANNOT USE print_out
             if shutil.which("npm") is None:
                 raise RuntimeError("npm is not installed or is not available in PATH.")
             
-            print(f"[Install OpenMCT] OpenMCT directory not found. Installing OpenMCT at {str(gv.openmct_dir)}")
+            print_out(f"[Install OpenMCT] OpenMCT directory not found. Installing OpenMCT at {str(gv.openmct_dir)}")
             
             run(["git", "clone", "https://github.com/nasa/openmct.git", str(gv.openmct_dir)])
             run(["npm", "install"], cwd=gv.openmct_dir)
             run(["npm", "audit", "fix"], cwd=gv.openmct_dir, check=False)
             run(["npm", "run", "build"], cwd=gv.openmct_dir)
             
-            print(f"[Install OpenMCT] OpenMCT directory not found. OpenMCT installed at {str(gv.openmct_dir)}")
+            print_out(f"[InstallOpenMCT] OpenMCT directory not found. OpenMCT installed at {str(gv.openmct_dir)}")
             
         except Exception as e:
             _, _, tb = sys.exc_info()
             shutil.rmtree(gv.openmct_dir)
-            print(f"[Install OpenMCT] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[Install OpenMCT] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
-
-# Operating Functions
-def check_configs():
-    pass
+def check_peripherals(): # check that all peripherals are configured properly
+    try:
+        issues = []
+        warnings = []
+        
+    except Exception as e:
+        _, _, tb = sys.exc_info()
+        raise type(e)(f"[CheckPeripherals] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
 def write_actuation(key, requested, source, missing_keys=None, do_print=True, bypass_checks=False):
     element = get_element(gv.data_tree, key)
@@ -486,32 +566,32 @@ def shutdown(do_abort=True):
         for name, server in gv.servers: # stops all running threads (runs after closing ni tasks because threads call ni tasks while running, would cause an error if reversed order)
             server.stop(delete_db=not gv.keep_db)
             if server.is_running:
-                print(f"[Shutdown] Warning: {name} server did not stop cleanly")
+                print_out(f"[Shutdown] Warning: {name} server did not stop cleanly")
                 safe = False
                 unsafe.append(name)
                 
         for name, thread in gv.threads: # stops all running threads (runs after closing ni tasks because threads call ni tasks while running, would cause an error if reversed order)
             thread.join(timeout=5)
             if thread.is_alive():
-                print(f"[Shutdown] Warning: {name} server did not stop cleanly")
+                print_out(f"[Shutdown] Warning: {name} server did not stop cleanly")
                 safe = False
                 unsafe.append(name)
                 
-        if not gv.keep_csv: # Removes csv logs if that setting is set
-            print('[Shutdown] removing logs')
+        if not gv.keep_logs: # Removes csv logs if that setting is set
+            print_out('[Shutdown] removing logs')
             for file in gv.telemetry.csv_files:
                 try:
                     os.remove(file)
                 except FileNotFoundError:
                     pass
                 except Exception as e:
-                    print(f'Failed to remove file {file}: {type(e).__name__} on line {tb.tb_lineno}: {e}')
+                    print_out(f'Failed to remove file {file}: {type(e).__name__} on line {tb.tb_lineno}: {e}')
                 
                 
     except Exception as e:
         _, _, tb = sys.exc_info()
-        print(f"[Shutdown] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+        print_out(f"[Shutdown] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
             
-    if safe: print("\n\n[Shutdown] All systems stopped safely\n\n")
-    else: print(f"\n\n[Shutdown] Threads or servers did not stop safely: {unsafe}\n\n")
+    if safe: print_out("\n\n[Shutdown] All systems stopped safely\n\n")
+    else: print_out(f"\n\n[Shutdown] Threads or servers did not stop safely: {unsafe}\n\n")
 

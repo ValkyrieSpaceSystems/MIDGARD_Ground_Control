@@ -1,4 +1,4 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket
 import numpy as np
 from queue import PriorityQueue, Queue, Empty, Full
 from datetime import datetime, UTC
@@ -15,7 +15,7 @@ import nidaqmx.system
 from labjack import ljm
 import Basilisk
 
-from midgard_functions import gv, print_out, error_out, get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, write_actuation, abort, unabort, shutdown
+from midgard_functions import gv, print_out, get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, check_peripherals, write_actuation, abort, unabort, shutdown
 
 
 PERIPHERALS_ROOT = os.path.join(os.path.dirname(__file__), "Peripherals")
@@ -101,7 +101,7 @@ def _load_element_function(manufacturer: str, module_name: str, function_name: s
     """
     path = os.path.join(PERIPHERALS_ROOT, manufacturer, f"{module_name}.py")
     if not os.path.exists(path):
-        print(f"[MIDGARD WARNING] Module not found: {path}")
+        print_out(f"[MIDGARD WARNING] Module not found: {path}")
         return None
 
     spec = importlib.util.spec_from_file_location(module_name, path)
@@ -109,12 +109,12 @@ def _load_element_function(manufacturer: str, module_name: str, function_name: s
     try:
         spec.loader.exec_module(module)
     except Exception as e:
-        print(f"[MIDGARD WARNING] Failed to load module '{module_name}': {e}")
+        print_out(f"[MIDGARD WARNING] Failed to load module '{module_name}': {e}")
         return None
 
     func = getattr(module, function_name, None)
     if func is None:
-        print(f"[MIDGARD WARNING] Function '{function_name}' not found in '{module_name}'")
+        print_out(f"[MIDGARD WARNING] Function '{function_name}' not found in '{module_name}'")
         return None
     return func
 
@@ -269,7 +269,7 @@ class Actuator:
             self.off_nominal_state = 'On'
         
         else:
-            print(f'[MIDGARD WARNING] Element {self.name} has unknown type {self.type}')
+            print_out(f'[MIDGARD WARNING] Element {self.name} has unknown type {self.type}')
             
                        
         if self.control_type == "switch":
@@ -314,11 +314,11 @@ class Actuator:
                 for ref in state.transition_to:
                     target = self.parent.states.get(ref.split('.')[-1])
                     if target is None:
-                        print(f"[MIDGARD WARNING] State '{state.id}' transitions to unknown state '{ref}'")
+                        print_out(f"[MIDGARD WARNING] State '{state.id}' transitions to unknown state '{ref}'")
                         continue
                     target = self.states.get(ref.split('.')[-1])
                     if target is None:
-                        print(f"[MIDGARD WARNING] State '{state.id}' transitions to state not in its selector'{ref}'")
+                        print_out(f"[MIDGARD WARNING] State '{state.id}' transitions to state not in its selector'{ref}'")
                         continue
                     resolved.append(ref)
                 state.transition_to = resolved
@@ -327,13 +327,13 @@ class Actuator:
                 self.default = self.states[self.default].index
             else:
                 self.default = 0
-                print(f"[MIDGARD WARNING] Selector '{self.id}' default '{self.default}' not found in selector states {self.states}")
+                print_out(f"[MIDGARD WARNING] Selector '{self.id}' default '{self.default}' not found in selector states {self.states}")
                     
             if self.nominal in self.states.keys():
                 self.nominal = self.states[self.nominal].index
             else:
                 self.nominal = 0
-                print(f"[MIDGARD WARNING] Selector '{self.id}' nominal '{self.nominal}' not found in selector states {self.states}")   
+                print_out(f"[MIDGARD WARNING] Selector '{self.id}' nominal '{self.nominal}' not found in selector states {self.states}")   
         
         self.value = self.default
         self.key = None
@@ -412,7 +412,7 @@ class NIModule:
             device_mod_num = int(device.name[device.name.find('Mod')+3:])-1
             if device_cdaq == self.parent.device and device_mod_num == self.module_num:
                 if self.type == 9205: # Voltage (Pressure Transducer)
-                    #print(f"NI-9205 Analog Voltage Input Module {device.name} Connected")
+                    #print_out(f"NI-9205 Analog Voltage Input Module {device.name} Connected")
                     try:
                         self.task = nidaqmx.Task()
                         self.task.ai_channels.add_ai_voltage_chan(
@@ -427,7 +427,7 @@ class NIModule:
                         raise ConnectionError(f"NI Initialization Error: Failed to add PT voltage channels {device.name}: {type(e).__name__} on line {tb.tb_lineno}: {e}")
     
                 elif self.type == 9253: # Current (Pressure Transducer)
-                    #print(f"NI-9253 Analog Current Input Module {device.name} Connected")
+                    #print_out(f"NI-9253 Analog Current Input Module {device.name} Connected")
                     try:
                         self.task = nidaqmx.Task()
                         self.task.ai_channels.add_ai_current_chan(
@@ -443,7 +443,7 @@ class NIModule:
                         raise ConnectionError(f"NI Initialization Error: Failed to add PT current channels {device.name}: {type(e).__name__} on line {tb.tb_lineno}: {e}")
     
                 elif self.type == 9213: # Thermocouple
-                    #print(f"NI-9213 Thermocouple Module {device.name} Connected")
+                    #print_out(f"NI-9213 Thermocouple Module {device.name} Connected")
                     try:
                         self.task = nidaqmx.Task()
                         self.task.ai_channels.add_ai_thrmcpl_chan(
@@ -459,7 +459,7 @@ class NIModule:
                         raise ConnectionError(f"NI Initialization Error: Failed to add channels {device.name}: {type(e).__name__} on line {tb.tb_lineno}: {e}")
     
                 elif self.type == 9237: # Load Cell
-                    #print(f"NI-9237 Load Cell Module {device.name} Connected")
+                    #print_out(f"NI-9237 Load Cell Module {device.name} Connected")
                     try:
                         self.task = nidaqmx.Task()
                         self.task.ai_channels.add_ai_force_bridge_table_chan(
@@ -478,7 +478,7 @@ class NIModule:
                         raise ConnectionError(f"NI Initialization Error: Failed to add LC channels {device.name}: {type(e).__name__} on line {tb.tb_lineno}: {e}")
                     
                 elif self.type == 9485: # SSR
-                    #print(f"NI-9485 SSR Module {device.name} Connected")
+                    #print_out(f"NI-9485 SSR Module {device.name} Connected")
                     self.task = nidaqmx.Task()
                     self.writer = DigitalMultiChannelWriter(self.task.out_stream)
                     for line in range(8):
@@ -488,7 +488,7 @@ class NIModule:
                     self.parent.writers[self.id] = self.writer
                     
                 else:
-                    #print(f"Unknown NI Module {device.product_type} {device.name}. Ignoring")
+                    #print_out(f"Unknown NI Module {device.product_type} {device.name}. Ignoring")
                     # check if any data_streams or modules use this 
                     raise
         
@@ -534,7 +534,7 @@ class NIModule:
             self.parent.data_queue.put((max_priority, data))
         except Exception as e:
             _, _, tb = sys.exc_info() 
-            print(f"[PeripheralHandler] Error: {self.parent.display_name} module {self.name} ({self.module_num}) Callback Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[PeripheralHandler] Error: {self.parent.display_name} module {self.name} ({self.module_num}) Callback Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
 
 # ── Peripheral class ───────────────────────────────────────────────────────────
@@ -655,7 +655,7 @@ class Peripheral:
                             reasons.append(f"it is the only way to transition to {elem.name}")
 
                 if reasons:
-                    print(f"[MIDGARD WARNING] element {element.name} cannot be removed because {combine_with_and(reasons)}")
+                    print_out(f"[MIDGARD WARNING] element {element.name} cannot be removed because {combine_with_and(reasons)}")
                 else:
                     to_remove.append(element)
                     
@@ -666,7 +666,7 @@ class Peripheral:
         # ── Select active interface ────────────────────────────────────
         self.interface: Interface | None = self.interfaces.get(self.interface_id)
         if self.interface is None:
-            print(f"[MIDGARD WARNING] Interface '{self.interface_id}' not found in {self.id}")
+            print_out(f"[MIDGARD WARNING] Interface '{self.interface_id}' not found in {self.id}")
 
         # ── Validate Config ────────────────────────────────────────────
         #put validation code here
