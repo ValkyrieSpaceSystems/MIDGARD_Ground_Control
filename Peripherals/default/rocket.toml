@@ -2,7 +2,6 @@
 name = "Rocket"
 description = "Generic Rocket"
 type = "rocket"
-first_phase = "startup"
 
 [meta.switch_display]
 namePosition = "top"
@@ -18,9 +17,9 @@ type = "abort"
 sync_group = "abort"
 default = false
 
-[actuator.switch_display]
-namePosition = "left"
-nameAlign = "right"
+#[actuator.switch_display]
+#namePosition = "left"
+#nameAlign = "right"
 
 [[actuator]]
 id = "main_lock"

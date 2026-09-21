@@ -13,20 +13,20 @@ var TELEMETRY_TREE = {
             }
         },
         {
-            "name": "ASGARD V0.2",
-            "key": "Valhala_I",
+            "name": "Pixhawk 4",
+            "key": "Pixhawk",
             "children": [
                 {
                     "name": "Actuator",
-                    "key": "Valhala_I.Actuator",
+                    "key": "Pixhawk.Actuator",
                     "children": [
                         {
                             "name": "Abort",
-                            "key": "Valhala_I.Actuator.abort",
+                            "key": "Pixhawk.Actuator.abort",
                             "children": [
                                 {
                                     "name": "Abort",
-                                    "key": "Valhala_I.Actuator.abort",
+                                    "key": "Pixhawk.Actuator.abort",
                                     "control": true,
                                     "measurement": {
                                         "format": "enum",
@@ -42,8 +42,8 @@ var TELEMETRY_TREE = {
                                         ]
                                     },
                                     "switch_display": {
-                                        "namePosition": "left",
-                                        "nameAlign": "right",
+                                        "namePosition": "top",
+                                        "nameAlign": "center",
                                         "valueAlign": "center"
                                     }
                                 }
@@ -51,80 +51,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Lockout",
-                            "key": "Valhala_I.Actuator.lockout",
+                            "key": "Pixhawk.Actuator.lockout",
                             "children": [
                                 {
                                     "name": "Main Lockout",
-                                    "key": "Valhala_I.Actuator.main_lock",
-                                    "control": true,
-                                    "measurement": {
-                                        "format": "enum",
-                                        "enumerations": [
-                                            {
-                                                "value": 0,
-                                                "string": "Disarmed"
-                                            },
-                                            {
-                                                "value": 1,
-                                                "string": "Armed"
-                                            }
-                                        ]
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
-                                    }
-                                },
-                                {
-                                    "name": "Pyro Arm",
-                                    "key": "Valhala_I.Actuator.pyro_arm",
-                                    "control": true,
-                                    "measurement": {
-                                        "format": "enum",
-                                        "enumerations": [
-                                            {
-                                                "value": 0,
-                                                "string": "Disarmed"
-                                            },
-                                            {
-                                                "value": 1,
-                                                "string": "Armed"
-                                            }
-                                        ]
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
-                                    }
-                                },
-                                {
-                                    "name": "Servo Arm",
-                                    "key": "Valhala_I.Actuator.servo_arm",
-                                    "control": true,
-                                    "measurement": {
-                                        "format": "enum",
-                                        "enumerations": [
-                                            {
-                                                "value": 0,
-                                                "string": "Disarmed"
-                                            },
-                                            {
-                                                "value": 1,
-                                                "string": "Armed"
-                                            }
-                                        ]
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
-                                    }
-                                },
-                                {
-                                    "name": "Launch Arm",
-                                    "key": "Valhala_I.Actuator.launch_arm",
+                                    "key": "Pixhawk.Actuator.main_lock",
                                     "control": true,
                                     "measurement": {
                                         "format": "enum",
@@ -149,34 +80,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Switch",
-                            "key": "Valhala_I.Actuator.switch",
+                            "key": "Pixhawk.Actuator.switch",
                             "children": [
                                 {
                                     "name": "Logging",
-                                    "key": "Valhala_I.Actuator.logging",
-                                    "control": true,
-                                    "measurement": {
-                                        "format": "enum",
-                                        "enumerations": [
-                                            {
-                                                "value": 0,
-                                                "string": "Off"
-                                            },
-                                            {
-                                                "value": 1,
-                                                "string": "On"
-                                            }
-                                        ]
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
-                                    }
-                                },
-                                {
-                                    "name": "Test Sequence",
-                                    "key": "Valhala_I.Actuator.test_sequence",
+                                    "key": "Pixhawk.Actuator.logging",
                                     "control": true,
                                     "measurement": {
                                         "format": "enum",
@@ -201,11 +109,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Selector",
-                            "key": "Valhala_I.Actuator.selector",
+                            "key": "Pixhawk.Actuator.selector",
                             "children": [
                                 {
                                     "name": "Flight Phase",
-                                    "key": "Valhala_I.Actuator.flight_phase",
+                                    "key": "Pixhawk.Actuator.flight_phase",
                                     "control": true,
                                     "measurement": {
                                         "format": "enum",
@@ -216,117 +124,15 @@ var TELEMETRY_TREE = {
                                             },
                                             {
                                                 "value": 1,
-                                                "string": "pad"
+                                                "string": "pre_flight"
                                             },
                                             {
                                                 "value": 2,
-                                                "string": "terminal"
+                                                "string": "flight"
                                             },
                                             {
                                                 "value": 3,
-                                                "string": "ascent"
-                                            },
-                                            {
-                                                "value": 4,
-                                                "string": "coast"
-                                            },
-                                            {
-                                                "value": 5,
-                                                "string": "descent"
-                                            },
-                                            {
-                                                "value": 6,
-                                                "string": "landed"
-                                            },
-                                            {
-                                                "value": 7,
                                                 "string": "shutdown"
-                                            }
-                                        ]
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
-                                    }
-                                }
-                            ]
-                        },
-                        {
-                            "name": "Button",
-                            "key": "Valhala_I.Actuator.button",
-                            "children": [
-                                {
-                                    "name": "Blink LED",
-                                    "key": "Valhala_I.Actuator.blink_led",
-                                    "trigger": true
-                                }
-                            ]
-                        },
-                        {
-                            "name": "Pyro",
-                            "key": "Valhala_I.Actuator.pyro",
-                            "children": [
-                                {
-                                    "name": "Drogue Pyro",
-                                    "key": "Valhala_I.Actuator.pyro_drogue",
-                                    "control": true,
-                                    "measurement": {
-                                        "format": "enum",
-                                        "enumerations": [
-                                            {
-                                                "value": 0,
-                                                "string": "Unfired"
-                                            },
-                                            {
-                                                "value": 1,
-                                                "string": "Fired"
-                                            }
-                                        ]
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
-                                    }
-                                },
-                                {
-                                    "name": "Main Pyro",
-                                    "key": "Valhala_I.Actuator.pyro_main",
-                                    "control": true,
-                                    "measurement": {
-                                        "format": "enum",
-                                        "enumerations": [
-                                            {
-                                                "value": 0,
-                                                "string": "Unfired"
-                                            },
-                                            {
-                                                "value": 1,
-                                                "string": "Fired"
-                                            }
-                                        ]
-                                    },
-                                    "switch_display": {
-                                        "namePosition": "top",
-                                        "nameAlign": "center",
-                                        "valueAlign": "center"
-                                    }
-                                },
-                                {
-                                    "name": "Motor Pyro",
-                                    "key": "Valhala_I.Actuator.pyro_motor",
-                                    "control": true,
-                                    "measurement": {
-                                        "format": "enum",
-                                        "enumerations": [
-                                            {
-                                                "value": 0,
-                                                "string": "Unfired"
-                                            },
-                                            {
-                                                "value": 1,
-                                                "string": "Fired"
                                             }
                                         ]
                                     },
@@ -342,15 +148,15 @@ var TELEMETRY_TREE = {
                 },
                 {
                     "name": "Data_Stream",
-                    "key": "Valhala_I.Data_Stream",
+                    "key": "Pixhawk.Data_Stream",
                     "children": [
                         {
                             "name": "Position",
-                            "key": "Valhala_I.Data_Stream.position",
+                            "key": "Pixhawk.Data_Stream.position",
                             "children": [
                                 {
                                     "name": "Position X",
-                                    "key": "Valhala_I.Data_Stream.pos_x",
+                                    "key": "Pixhawk.Data_Stream.pos_x",
                                     "control": false,
                                     "measurement": {
                                         "units": "m",
@@ -359,7 +165,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Position Y",
-                                    "key": "Valhala_I.Data_Stream.pos_y",
+                                    "key": "Pixhawk.Data_Stream.pos_y",
                                     "control": false,
                                     "measurement": {
                                         "units": "m",
@@ -368,7 +174,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Position Z",
-                                    "key": "Valhala_I.Data_Stream.pos_z",
+                                    "key": "Pixhawk.Data_Stream.pos_z",
                                     "control": false,
                                     "measurement": {
                                         "units": "m",
@@ -379,11 +185,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Velocity",
-                            "key": "Valhala_I.Data_Stream.velocity",
+                            "key": "Pixhawk.Data_Stream.velocity",
                             "children": [
                                 {
                                     "name": "Velocity X",
-                                    "key": "Valhala_I.Data_Stream.vel_x",
+                                    "key": "Pixhawk.Data_Stream.vel_x",
                                     "control": false,
                                     "measurement": {
                                         "units": "m/s",
@@ -392,7 +198,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Velocity Y",
-                                    "key": "Valhala_I.Data_Stream.vel_y",
+                                    "key": "Pixhawk.Data_Stream.vel_y",
                                     "control": false,
                                     "measurement": {
                                         "units": "m/s",
@@ -401,7 +207,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Velocity Z",
-                                    "key": "Valhala_I.Data_Stream.vel_z",
+                                    "key": "Pixhawk.Data_Stream.vel_z",
                                     "control": false,
                                     "measurement": {
                                         "units": "m/s",
@@ -412,11 +218,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Acceleration",
-                            "key": "Valhala_I.Data_Stream.acceleration",
+                            "key": "Pixhawk.Data_Stream.acceleration",
                             "children": [
                                 {
                                     "name": "Acceleration X",
-                                    "key": "Valhala_I.Data_Stream.accel_x",
+                                    "key": "Pixhawk.Data_Stream.accel_x",
                                     "control": false,
                                     "measurement": {
                                         "units": "m/s^2",
@@ -425,7 +231,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Acceleration Y",
-                                    "key": "Valhala_I.Data_Stream.accel_y",
+                                    "key": "Pixhawk.Data_Stream.accel_y",
                                     "control": false,
                                     "measurement": {
                                         "units": "m/s^2",
@@ -434,7 +240,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Acceleration Z",
-                                    "key": "Valhala_I.Data_Stream.accel_z",
+                                    "key": "Pixhawk.Data_Stream.accel_z",
                                     "control": false,
                                     "measurement": {
                                         "units": "m/s^2",
@@ -445,11 +251,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Attitude",
-                            "key": "Valhala_I.Data_Stream.attitude",
+                            "key": "Pixhawk.Data_Stream.attitude",
                             "children": [
                                 {
                                     "name": "Pitch",
-                                    "key": "Valhala_I.Data_Stream.pitch",
+                                    "key": "Pixhawk.Data_Stream.pitch",
                                     "control": false,
                                     "measurement": {
                                         "units": "deg",
@@ -458,7 +264,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Roll",
-                                    "key": "Valhala_I.Data_Stream.roll",
+                                    "key": "Pixhawk.Data_Stream.roll",
                                     "control": false,
                                     "measurement": {
                                         "units": "deg",
@@ -467,40 +273,10 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "Yaw",
-                                    "key": "Valhala_I.Data_Stream.yaw",
+                                    "key": "Pixhawk.Data_Stream.yaw",
                                     "control": false,
                                     "measurement": {
                                         "units": "deg",
-                                        "format": "number"
-                                    }
-                                }
-                            ]
-                        },
-                        {
-                            "name": "Compass",
-                            "key": "Valhala_I.Data_Stream.compass",
-                            "children": [
-                                {
-                                    "name": "Heading",
-                                    "key": "Valhala_I.Data_Stream.heading",
-                                    "control": false,
-                                    "measurement": {
-                                        "units": "deg",
-                                        "format": "number"
-                                    }
-                                }
-                            ]
-                        },
-                        {
-                            "name": "Pressure",
-                            "key": "Valhala_I.Data_Stream.pressure",
-                            "children": [
-                                {
-                                    "name": "Static Pressure",
-                                    "key": "Valhala_I.Data_Stream.static_pressure",
-                                    "control": false,
-                                    "measurement": {
-                                        "units": "Pa",
                                         "format": "number"
                                     }
                                 }
@@ -508,11 +284,11 @@ var TELEMETRY_TREE = {
                         },
                         {
                             "name": "Gps",
-                            "key": "Valhala_I.Data_Stream.gps",
+                            "key": "Pixhawk.Data_Stream.gps",
                             "children": [
                                 {
                                     "name": "GPS Latitude",
-                                    "key": "Valhala_I.Data_Stream.gps_lat",
+                                    "key": "Pixhawk.Data_Stream.gps_lat",
                                     "control": false,
                                     "measurement": {
                                         "units": "deg",
@@ -521,7 +297,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "GPS Longitude",
-                                    "key": "Valhala_I.Data_Stream.gps_lon",
+                                    "key": "Pixhawk.Data_Stream.gps_lon",
                                     "control": false,
                                     "measurement": {
                                         "units": "deg",
@@ -530,7 +306,7 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "GPS Altitude",
-                                    "key": "Valhala_I.Data_Stream.gps_alt",
+                                    "key": "Pixhawk.Data_Stream.gps_alt",
                                     "control": false,
                                     "measurement": {
                                         "units": "m",
@@ -539,10 +315,10 @@ var TELEMETRY_TREE = {
                                 },
                                 {
                                     "name": "GPS Time",
-                                    "key": "Valhala_I.Data_Stream.gps_time",
+                                    "key": "Pixhawk.Data_Stream.gps_time",
                                     "control": false,
                                     "measurement": {
-                                        "units": "unix_s",
+                                        "units": "s",
                                         "format": "number"
                                     }
                                 }

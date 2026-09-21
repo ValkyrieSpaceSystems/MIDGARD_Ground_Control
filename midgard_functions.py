@@ -1,7 +1,8 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket, platform, serial
 import numpy as np
 from queue import PriorityQueue, Queue, Empty, Full
 from datetime import datetime, UTC
+from pymavlink import mavutil
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +15,74 @@ from nidaqmx.constants import TerminalConfiguration, AcquisitionType, LineGroupi
 import nidaqmx.system
 from labjack import ljm
 import Basilisk
+
+_G = 9.80665  # standard gravity, m/s^2
+ 
+# unit -> (kind, scale, offset), where value_in_base_unit = value * scale + offset.
+# Only units of the same kind can be converted to each other.
+UNITS = {
+    # angle (base: rad)
+    "rad": ("angle", 1.0, 0.0),
+    "deg": ("angle", math.pi / 180, 0.0),
+    "cdeg": ("angle", math.pi / 18000, 0.0),
+    "degE7": ("angle", math.pi / 1.8e9, 0.0),
+    # angular rate (base: rad/s)
+    "rad/s": ("angular_rate", 1.0, 0.0),
+    "mrad/s": ("angular_rate", 1e-3, 0.0),
+    "deg/s": ("angular_rate", math.pi / 180, 0.0),
+    # length (base: m)
+    "m": ("length", 1.0, 0.0),
+    "mm": ("length", 1e-3, 0.0),
+    "cm": ("length", 1e-2, 0.0),
+    "dm": ("length", 0.1, 0.0),
+    "dam": ("length", 10.0, 0.0),
+    "km": ("length", 1000.0, 0.0),
+    "in": ("length", 0.0254, 0.0),
+    "ft": ("length", 0.3048, 0.0),
+    "mi": ("length", 1609.344, 0.0),
+    "nmi": ("length", 1852.0, 0.0),
+    # speed (base: m/s)
+    "m/s": ("speed", 1.0, 0.0),
+    "cm/s": ("speed", 1e-2, 0.0),
+    "dm/s": ("speed", 0.1, 0.0),
+    "km/h": ("speed", 1 / 3.6, 0.0),
+    "mph": ("speed", 0.44704, 0.0),
+    "knots": ("speed", 1852 / 3600, 0.0),
+    "ft/s": ("speed", 0.3048, 0.0),
+    # acceleration (base: m/s/s); "mG" is milli-g
+    "m/s/s": ("acceleration", 1.0, 0.0),
+    "m/s^2": ("acceleration", 1.0, 0.0),
+    "mG": ("acceleration", _G / 1000, 0.0),
+    "g": ("acceleration", _G, 0.0),
+    # pressure (base: Pa)
+    "Pa": ("pressure", 1.0, 0.0),
+    "hPa": ("pressure", 100.0, 0.0),
+    "mbar": ("pressure", 100.0, 0.0),
+    "kPa": ("pressure", 1000.0, 0.0),
+    # time (base: s)
+    "s": ("time", 1.0, 0.0),
+    "ds": ("time", 0.1, 0.0),
+    "ms": ("time", 1e-3, 0.0),
+    "us": ("time", 1e-6, 0.0),
+    # electrical
+    "V": ("voltage", 1.0, 0.0),
+    "mV": ("voltage", 1e-3, 0.0),
+    "A": ("current", 1.0, 0.0),
+    "cA": ("current", 1e-2, 0.0),
+    "mA": ("current", 1e-3, 0.0),
+    # magnetic field (base: gauss)
+    "gauss": ("magnetic_field", 1.0, 0.0),
+    "mgauss": ("magnetic_field", 1e-3, 0.0),
+    # percent (base: %)
+    "%": ("percent", 1.0, 0.0),
+    "d%": ("percent", 0.1, 0.0),
+    "c%": ("percent", 0.01, 0.0),
+    # temperature (base: degC)
+    "degC": ("temperature", 1.0, 0.0),
+    "cdegC": ("temperature", 0.01, 0.0),
+    "K": ("temperature", 1.0, -273.15),
+    "degF": ("temperature", 5 / 9, -32 * 5 / 9),
+}
 
 class global_vars():
     def __init__(self):
@@ -98,6 +167,33 @@ def run(command, cwd=None, check=True, shell=False):
     print_out(f"\n> {' '.join(command)}")
     subprocess.run(command, cwd=cwd, check=check, shell=shell)
 
+def convert_units(value, from_unit, to_unit):
+    """
+    Convert `value` from `from_unit` to `to_unit`.
+ 
+    `value` can be a number, a list/tuple of numbers (converted element by
+    element), or anything that supports arithmetic (e.g. a NumPy array).
+    Raises ValueError for an unknown unit or for units of different kinds
+    (e.g. "rad" -> "m").
+    """
+    if from_unit == to_unit:
+        return value
+ 
+    try:
+        kind_from, scale_from, off_from = UNITS[from_unit]
+        kind_to, scale_to, off_to = UNITS[to_unit]
+    except KeyError as e:
+        raise ValueError(f"Unknown unit {e.args[0]!r}") from None
+    if kind_from != kind_to:
+        raise ValueError(f"Cannot convert {from_unit!r} ({kind_from}) to {to_unit!r} ({kind_to})")
+ 
+    def one(v):
+        return ((v * scale_from + off_from) - off_to) / scale_to
+ 
+    if isinstance(value, (list, tuple)):
+        return [one(v) for v in value]
+    return one(value)
+
 
 # Operating Functions (Complex)
 def check_configs(): # check that all config variables are the correct format with acceptable values
@@ -146,11 +242,33 @@ def check_configs(): # check that all config variables are the correct format wi
                         else:
                             issues.append(f"Cannot create directory: {os.path.abspath(cvars['var'])}")
                 elif cvars['subtype'] == 'port': # check port is open
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                        try:
-                            sock.bind(("127.0.0.1",cvars['var']))
-                        except OSError:
-                            issues.append(f"OSError: {cv} variable '{cvars['var']}' port already in use")
+                    if platform.system() == "Windows":
+                        result = subprocess.run(
+                            ["netstat", "-ano"],
+                            capture_output=True,
+                            text=True
+                        )
+
+                        for line in result.stdout.splitlines():
+                            parts = line.split()
+
+                            if len(parts) >= 4:
+                                local_address = parts[1]
+                                state = parts[3]
+
+                                if local_address.endswith(f":{cvars['var']}") and state == "LISTENING":
+                                    issues.append(f"OSError: {cv} variable '{cvars['var']}' port already in use")
+                    
+                    else:
+                        result = subprocess.run(
+                            ["lsof", "-i", f":{cvars['var']}"],
+                            capture_output=True,
+                            text=True
+                        )
+                        for line in result.stdout.splitlines()[1:]:
+                            if "LISTEN" in line:
+                                issues.append(f"OSError: {cv} variable '{cvars['var']}' port already in use")
+            
             if 'warning' in cvars:
                 if cvars['var'] in cvars['warning']['val']:
                     warnings.append(f"{cv} variable value is {cvars['var']}. {cvars['warning']['msg']}")
@@ -237,7 +355,7 @@ def check_peripherals(): # check that all peripherals are configured properly
         _, _, tb = sys.exc_info()
         raise type(e)(f"[CheckPeripherals] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
-def write_actuation(key, requested, source, missing_keys=None, do_print=True, bypass_checks=False):
+def write_actuation(key, requested, source, missing_keys=None, do_print=gv.print_actuations, bypass_checks=False):
     element = get_element(gv.data_tree, key)
     
     try:
@@ -495,12 +613,13 @@ def abort(cause='', verbose_cause=True, verbose_abort=True): # A digital abort e
             # Peripheral Abort Logic
             ###
             for peripheral in gv.peripherals.values():
-                if peripheral.manufacturer == 'NI':
-                    for writer in peripheral.writers: # Iterates through all writers and sets all channels on each module to false
-                        writer.write_one_sample_one_line(np.array([False]*8))
-                    
-                elif peripheral.manufacturer == 'LabJack':
-                    ljm.eWriteNames(peripheral.handle, len(peripheral.labjack_actuators), [elem.channel for elem in peripheral.labjack_actuators], [0]*len(peripheral.labjack_actuators))
+                if type(peripheral) != dict:
+                    if peripheral.manufacturer == 'NI':
+                        for writer in peripheral.writers: # Iterates through all writers and sets all channels on each module to false
+                            writer.write_one_sample_one_line(np.array([False]*8))
+                        
+                    elif peripheral.manufacturer == 'LabJack':
+                        ljm.eWriteNames(peripheral.handle, len(peripheral.labjack_actuators), [elem.channel for elem in peripheral.labjack_actuators], [0]*len(peripheral.labjack_actuators))
                     
             if verbose_abort: 
                 print_out("\nABORTING\nABORTING\nABORTING\n")
@@ -534,7 +653,7 @@ def shutdown(do_abort=True):
         unsafe = []
         
         # Close peripherals
-        write_actuation(gv.peripherals['Valhala_I'].elements['flight_phase'].key, 'shutdown', "auto", do_print=False)
+        # Do something here to transmit shutdown to peripherals
         
         for peripheral in gv.peripherals.values():
             if peripheral.manufacturer == 'VSS':
@@ -595,3 +714,229 @@ def shutdown(do_abort=True):
     if safe: print_out("\n\n[Shutdown] All systems stopped safely\n\n")
     else: print_out(f"\n\n[Shutdown] Threads or servers did not stop safely: {unsafe}\n\n")
 
+
+# Workers
+def peripheral_worker(peripheral):
+    try:
+        def handle_data(data):
+            try:
+                max_utc = max(data)
+                for ts, sample in sorted(data.items()):
+                    for key, value in sample.items():
+                        element = get_element(gv.data_tree, key)
+                        if element.element_class in ['Actuator', 'State']:
+                            write_actuation(key, value, "peripheral")
+                        elif ts == max_utc:
+                            print_to_gui = True if ts - element.last_ts > 100 else False
+                            gv.telemetry.send(ts, key, value, element, "peripheral", push_to_gui=print_to_gui)
+                            if print_to_gui:
+                                element.last_ts = ts
+                        else:
+                            gv.telemetry.send(ts, key, value, element, "peripheral", push_to_gui=False)
+            except Exception as e:
+                _, _, tb = sys.exc_info()
+                print_out(f"[{peripheral.worker_name}] Data Handling Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
+                        
+        if gv.simulated_data:
+            i = 0
+            j = False
+            str_list = ['a','b','c','d','e','f','g','h','i','j','k']
+            peripheral.init_event.set()
+            print_out(f"[{peripheral.worker_name}] started")
+            while not gv.stop_event.is_set():
+                data = {}
+                time.sleep(0.1)
+                sample = {}
+                for key in gv.all_keys:
+                    element = get_element(gv.data_tree, key)
+                    if element.element_class == 'Data_Stream':
+                        if element.unit == 'bool': sample[key] = j
+                        elif element.unit == 'str': sample[key] = str_list[math.floor(i/10)]
+                        else: sample[key] = i
+                #sample['Valhala_I.Actuator.main_lock'] = j
+                i = 0 if i == 100 else i + 1
+                j = not j if i == 100 else j
+                ts = int(time.time() * 1000)
+                data = {ts:sample}
+                
+                handle_data(data)
+        
+        elif peripheral.manufacturer == 'NI':
+            peripheral.init_event.set()
+            print_out(f"[{peripheral.worker_name}] started")
+            while not gv.stop_event.is_set():
+                try:
+                    data = peripheral.data_queue.get(timeout=0.2)
+                    handle_data(data)
+                except Empty:
+                    continue
+                except Exception as e:
+                    _, _, tb = sys.exc_info()
+                    print_out(f"[{peripheral.worker_name}] NI Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
+                    
+        elif peripheral.manufacturer == 'LabJack':
+            peripheral.init_event.set()
+            print_out(f"[{peripheral.worker_name}] started")
+            while not gv.stop_event.is_set():
+                try:
+                    ts_end = int(time.time() * 1000)
+                    ret = ljm.eStreamRead(peripheral.handle) # get data from labjack
+                    aData = ret[0]
+                    
+                    if not aData:
+                        continue
+                    
+                    deinterleaved = np.array([aData[index::peripheral.numAddresses] for index in range(peripheral.numAddresses)]) # labjack returns a 1D arary, convert to 2d
+                    
+                    sensor_data = []
+                    for channel in peripheral.channels:
+                        chanNumAbs = peripheral.channels.index(channel)
+                        channelData = deinterleaved[chanNumAbs]
+                        sensor_data.append(channelData)
+                    sensor_data = np.array(sensor_data).T
+                    
+                    data = {}
+                    for i, sample in enumerate(sensor_data): # Number of data samples
+                        ts = ts_end - (len(sensor_data) - i) * (1/peripheral.pull_freq) * 1e9  # the timestamp we get is from the last data point so we need to calculate the timestamps backwards from this
+                        data[ts] = {}
+                        for j, channel in enumerate(peripheral.channels): # Number of channels
+                            data[ts][channel.key] = sample[j] * channel.scale + channel.offset
+                    handle_data(data)
+                    
+                except Exception as e:
+                    _, _, tb = sys.exc_info()
+                    print_out(f"[{peripheral.worker_name}] LabJack Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
+                    
+        elif peripheral.interface.protocol == 'mavlink':
+            while not gv.stop_event.is_set():
+                try:
+                    if peripheral.interface.connection == None:
+                        peripheral.interface.connect()
+                        
+                        mavlink_lookup = {}
+                        for element in peripheral.elements.values(): # connect elements to a mavlink message and field name
+                            if hasattr(element,'message_type') and hasattr(element,'field_name'):
+                                if element.message_type not in [None, ''] and element.field_name not in [None, '']:
+                                    mavlink_lookup.setdefault(element.message_type.upper(), {}).setdefault(element.field_name, []).append(element)
+                        id_and_hz = []
+                        for message_type in mavlink_lookup: # find the largest sample rate per message
+                            hz = 0
+                            for field_name in mavlink_lookup[message_type]:
+                                for element in mavlink_lookup[message_type][field_name]:
+                                    if element.sample_rate_hz > hz:
+                                        hz = element.sample_rate_hz
+                            id_and_hz.append((message_type,hz))
+                        for name, hz in id_and_hz: # request message stream
+                            msg_id = getattr(mavutil.mavlink, f"MAVLINK_MSG_ID_{name}")
+                            peripheral.interface.connection.mav.command_long_send(
+                                peripheral.interface.connection.target_system,
+                                peripheral.interface.connection.target_component,
+                                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+                                0,                  # confirmation
+                                msg_id,             # param1: message ID
+                                int(1e6 / hz),      # param2: interval in microseconds
+                                0, 0, 0, 0, 0,      # params 3-7 unused
+                            )
+                        
+                        if not peripheral.init_event.is_set():
+                            print_out(f"[{peripheral.worker_name}] started with connection on {peripheral.device}")
+                        peripheral.init_event.set()
+                        
+                        
+                        last_ts = time.time()
+                        while not gv.stop_event.is_set():
+                            try:
+                                msg = peripheral.interface.connection.recv_match(blocking=True, timeout=1)
+                                ts = int(time.time() * 1000)
+                                if msg is None:
+                                    if time.time() - last_ts > peripheral.interface.timeout:
+                                        print(f"[{peripheral.worker_name}] Connection Error: No data received, link lost. Retrying")
+                                        break
+                                    continue
+                                if msg.get_type() == "BAD_DATA":
+                                    continue
+                                last_ts = time.time()
+                                
+                                data = {ts:{}}
+                                msg_dict = msg.to_dict()
+                                for field_name, elements in mavlink_lookup.get(msg_dict.get("mavpackettype"), {}).items():
+                                    if field_name in msg_dict:
+                                        for element in elements:
+                                            value = convert_units(msg_dict[field_name],msg.fieldunits_by_name.get(field_name),element.unit) # value, default_unit, desired_unit
+                                            data[ts][element.key] = value
+                                handle_data(data)
+                                
+                            except Exception as e:
+                                _, _, tb = sys.exc_info()
+                                print_out(f"[{peripheral.worker_name}] MAVLink Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
+                                if type(e).__name__ == 'SerialException': 
+                                    break
+                                
+                except Exception as e:
+                    _, _, tb = sys.exc_info()
+                    print_out(f"[{peripheral.worker_name}] MAVLink Connection Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
+                finally:
+                    peripheral.interface.connection.close()
+            
+        elif peripheral.interface.protocol == 'elrs':
+            peripheral.init_event.set()
+            print_out(f"[{peripheral.worker_name}] started")
+            while not gv.stop_event.is_set():
+                try:
+                    data = {}
+                    time.sleep(0.2)
+                    
+                except Exception as e:
+                    _, _, tb = sys.exc_info()
+                    print_out(f"[{peripheral.worker_name}] ELRS Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
+                
+    except Exception as e:
+        if not gv.stop_event.is_set():
+            _, _, tb = sys.exc_info()
+            print_out(f"[{peripheral.worker_name}] Setup Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+    finally: 
+        print_out(f"[{peripheral.worker_name}] stopped")
+
+def gui_worker(init_event):
+    # Handles all user inputs from GUI
+    try:
+        for key in gv.all_keys: # Populate default values
+            element = get_element(gv.data_tree, key)
+            default = getattr(element, 'default', None)
+            if default is not None:
+                write_actuation(key, default, "auto", do_print=False)
+
+        init_event.set()
+        print_out(f"[GUI Worker] started")
+        while not gv.stop_event.is_set():
+            try:
+                cmd = gv.telemetry.command_queue.get(timeout=0.1)
+            except Empty:
+                continue
+            
+            pressed_keys = [str(k).lower() for k in cmd.get("pressed_keys", [])]
+            
+            # add shutdown logic here
+                
+            key, requested = cmd["key"], cmd["requested"]
+
+            element = get_element(gv.data_tree, key)
+            if element is None:
+                print_out(f"[GUI Worker] Unknown GUI Key Error: '{key}'")
+                continue
+            
+            missing_keys = [k for k in gv.confirmation_keys if k not in pressed_keys]
+            write_actuation(key, requested, "user", missing_keys=missing_keys)
+                    
+                
+    except Exception as e:
+        if not gv.stop_event.is_set():
+            _, _, tb = sys.exc_info()
+            print_out(f"[GUI Worker] Initial Write Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+    finally: # write nominal states for all switches
+        for key in gv.all_keys: # Populate default values
+            element = get_element(gv.data_tree, key)
+            default = getattr(element, 'nominal', None)
+            if default is not None:
+                write_actuation(key, default, "auto", do_print=False)
+        print_out(f"[GUI Worker] stopped")

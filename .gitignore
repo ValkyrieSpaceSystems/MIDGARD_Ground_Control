@@ -6,3 +6,4 @@ logs
 /__pycache__
 telemetry.db-shm
 telemetry.db-wal
+SF_NI_Integration32.py

@@ -1,0 +1,279 @@
+[meta]
+name = "Pixhawk 4"
+description = "Generic Pixhawk 4"
+type = "drone"
+notes = ""
+parent = "drone"
+
+# ── Interfaces ─────────────────────────────────────────────────────────
+[[interface]]
+id = "mavlink"
+name = "MAVLink"
+description = "MAVLink Interface"
+type = "serial"
+protocol = "mavlink"
+device = "/dev/ttyACM0"
+		# USB: Linux "/dev/ttyACM0" | Windows "COM5" | macOS "/dev/tty.usbmodemXXXX"
+		# Radio: the port of your ground-side radio, e.g. "/dev/ttyUSB0" or "COM7"
+baud = 115200
+timeout = 5
+
+# ── Phases ─────────────────────────────────────────────────────────────
+[[actuator]]
+id = "flight_phase"
+name = "Flight Phase"
+description = "Phase of flight selector/display"
+type = "selector"
+default = "startup"
+nominal = "pad"
+
+[[state]]
+id = "startup"
+name = "Startup"
+description = "Vehicle is powering on"
+type = "phase"
+parent = "flight_phase"
+transition_to = ["phase.pad"]
+sources = ["auto", "peripheral"]
+
+[[state]]
+id = "pre_flight"
+name = "Pre-Flight"
+description = "Vehicle preparing for flight"
+type = "phase"
+parent = "flight_phase"
+transition_to = ["phase.flight"]
+sources = ["auto", "user", "peripheral"]
+
+[[state]]
+id = "flight"
+name = "Flight"
+description = "Vehicle in flight"
+type = "phase"
+parent = "flight_phase"
+transition_to = ["phase.pre_flight", "phase.shutdown"]
+armed_by = ["lockout.main_lock"] # all must be true
+disarmed_by = ["lockout.abort"] # all must be false
+sources = ["user", "peripheral"]
+
+[[state]]
+id = "shutdown"
+name = "Shutdown"
+description = "Vehicle is powering down"
+type = "phase"
+parent = "flight_phase"
+transition_to = []
+sources = ["auto", "user", "peripheral"]
+
+# ── POSITION ───────────────────────────────────────────────────────────
+[[data_stream]]
+id = "pos_x"
+name = "Position X"
+description = "Position in the X axis"
+type = "position"
+component = "x"
+unit = "m"
+range = [-50_000.0, 50_000.0]
+nominal = [-5_000.0, 5_000.0]
+message_type = ""
+field_name = ""
+sample_rate_hz = 100
+
+[[data_stream]]
+id = "pos_y"
+name = "Position Y"
+description = "Position in the Y axis"
+type = "position"
+component = "y"
+unit = "m"
+range = [-50_000.0, 50_000.0]
+nominal = [-5_000.0, 5_000.0]
+message_type = ""
+field_name = ""
+sample_rate_hz = 100
+
+[[data_stream]]
+id = "pos_z"
+name = "Position Z"
+description = "Position in the Z axis"
+type = "position"
+component = "z"
+unit = "m"
+range = [-500.0, 100_000.0]
+nominal = [0.0, 30_000.0]
+message_type = ""
+field_name = ""
+sample_rate_hz = 100
+
+# ── VELOCITY ───────────────────────────────────────────────────────────
+[[data_stream]]
+id = "vel_x"
+name = "Velocity X"
+description = "Velocity in the X axis"
+type = "velocity"
+component = "x"
+unit = "m/s"
+range = [-2_000.0, 2_000.0]
+nominal = [-500.0, 500.0]
+message_type = ""
+field_name = ""
+sample_rate_hz = 100
+
+[[data_stream]]
+id = "vel_y"
+name = "Velocity Y"
+description = "Velocity in the Y axis"
+type = "velocity"
+component = "y"
+unit = "m/s"
+range = [-2_000.0, 2_000.0]
+nominal = [-500.0, 500.0]
+message_type = ""
+field_name = ""
+sample_rate_hz = 100
+
+[[data_stream]]
+id = "vel_z"
+name = "Velocity Z"
+description = "Velocity in the Z axis"
+type = "velocity"
+component = "z"
+unit = "m/s"
+range = [-2_000.0, 2_000.0]
+nominal = [-500.0, 500.0]
+message_type = ""
+field_name = ""
+sample_rate_hz = 100
+
+# ── ACCELERATION ───────────────────────────────────────────────────────
+[[data_stream]]
+id = "accel_x"
+name = "Acceleration X"
+description = "Acceleration in the X axis"
+type = "acceleration"
+component = "x"
+unit = "m/s^2"
+range = [-160.0, 160.0]
+nominal = [-20.0, 20.0]
+message_type = ""
+field_name = ""
+sample_rate_hz = 100
+
+[[data_stream]]
+id = "accel_y"
+name = "Acceleration Y"
+description = "Acceleration in the Y axis"
+type = "acceleration"
+component = "y"
+unit = "m/s^2"
+range = [-160.0, 160.0]
+nominal = [-20.0, 20.0]
+message_type = ""
+field_name = ""
+sample_rate_hz = 100
+
+[[data_stream]]
+id = "accel_z"
+name = "Acceleration Z"
+description = "Acceleration in the Z axis"
+type = "acceleration"
+component = "z"
+unit = "m/s^2"
+range = [-160.0, 160.0]
+nominal = [-20.0, 20.0]
+message_type = ""
+field_name = ""
+sample_rate_hz = 100
+
+# ── ATTITUDE ───────────────────────────────────────────────────────────
+[[data_stream]]
+id = "pitch"
+name = "Pitch"
+description = "Rotation along the X axis"
+type = "attitude"
+component = "pitch"
+unit = "deg"
+range = [-180.0, 180.0]
+nominal = [-30.0, 30.0]
+message_type = "ATTITUDE"
+field_name = "pitch"
+sample_rate_hz = 10 #Hz
+
+[[data_stream]]
+id = "roll"
+name = "Roll"
+description = "Rotation along the Z axis"
+type = "attitude"
+component = "roll"
+unit = "deg"
+range = [-180.0, 180.0]
+nominal = [-30.0, 30.0]
+message_type = "ATTITUDE"
+field_name = "roll"
+sample_rate_hz = 5 #Hz
+
+[[data_stream]]
+id = "yaw"
+name = "Yaw"
+description = "Rotation along the Y axis"
+type = "attitude"
+component = "yaw"
+unit = "deg"
+range = [-180.0, 180.0]
+nominal = [-180.0, 180.0]
+message_type = "ATTITUDE"
+field_name = "yaw"
+sample_rate_hz = 10 #Hz
+
+# ── GPS ────────────────────────────────────────────────────────────────
+[[data_stream]]
+id = "gps_lat"
+name = "GPS Latitude"
+description = "GPS Latitude Coordinate"
+type = "gps"
+component = "latitude"
+unit = "deg"
+range = [-90.0, 90.0]
+nominal = [25.0, 50.0] # CONUS — tighten to your launch site
+message_type = "GLOBAL_POSITION_INT"
+field_name = "lat"
+sample_rate_hz = 5 #Hz
+
+[[data_stream]]
+id = "gps_lon"
+name = "GPS Longitude"
+description = "GPS Longitude Coordinate"
+type = "gps"
+component = "longitude"
+unit = "deg"
+range = [-180.0, 180.0]
+nominal = [-125.0, -65.0] # CONUS — tighten to your launch site
+message_type = "GLOBAL_POSITION_INT"
+field_name = "lon"
+sample_rate_hz = 5 #Hz
+
+[[data_stream]]
+id = "gps_alt"
+name = "GPS Altitude"
+description = "GPS Altitude Coordinate"
+type = "gps"
+component = "altitude"
+unit = "m"
+range = [-500.0, 100_000.0]
+nominal = [0.0, 30_000.0]
+message_type = "GLOBAL_POSITION_INT"
+field_name = "alt"
+sample_rate_hz = 5 #Hz
+
+[[data_stream]]
+id = "gps_time"
+name = "GPS Time"
+description = "GPS Time Coordinate"
+type = "gps"
+component = "time"
+unit = "s"
+range = [0.0, 9_999_999_999.0]
+nominal = [0.0, 9_999_999_999.0]   # validated by staleness check, not bounds
+message_type = "GLOBAL_POSITION_INT"
+field_name = "time_boot_ms"
+sample_rate_hz = 5 #Hz

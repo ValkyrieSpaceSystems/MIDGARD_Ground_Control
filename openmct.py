@@ -1,7 +1,8 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket, platform, serial
 import numpy as np
 from queue import PriorityQueue, Queue, Empty, Full
 from datetime import datetime, UTC
+from pymavlink import mavutil
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -196,7 +197,7 @@ class OpenMCTServer:
 
     def start(self):
         if self.is_running:
-            print_out("[OpenMCTServer] is already running.")
+            print_out("[OpenMCT Server] is already running.")
             return
                             
         config = uvicorn.Config(
@@ -217,18 +218,18 @@ class OpenMCTServer:
         while not getattr(self._server, "started", False):
             time.sleep(0.01)
 
-        print_out(f"[OpenMCTServer] started on port {self.port}")
+        print_out(f"[OpenMCT Server] started on port {self.port}")
 
     def stop(self, delete_db=False):
         if not self.is_running:
-            print_out("[OpenMCTServer] is not running.")
+            print_out("[OpenMCT Server] is not running.")
             return
 
         self._server.should_exit = True
         self._thread.join(timeout=5)
         self._server = None
         self._thread = None
-        print_out("[OpenMCTServer] stopped.")
+        print_out("[OpenMCT Server] stopped.")
 
     def restart(self):
         self.stop()
@@ -281,9 +282,6 @@ class TelemetryServer:
         self.app.add_middleware(
             CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
         )
-
-        self._init_db()
-        self._register_routes()
 
     # ---------------- storage ----------------
 
@@ -345,7 +343,7 @@ class TelemetryServer:
             await websocket.accept()
             self._clients.append(websocket)
             if self.show_logs:
-                print_out(f"[TelemetryServer] client connected ({len(self._clients)} clients)")
+                print_out(f"[Telemetry Server] client connected ({len(self._clients)} clients)")
             try:
                 while True:
                     raw = await websocket.receive_text()
@@ -362,7 +360,7 @@ class TelemetryServer:
                 if websocket in self._clients:
                     self._clients.remove(websocket)
                 if self.show_logs:
-                    print_out(f"[TelemetryServer] client disconnected ({len(self._clients)} clients)")
+                    print_out(f"[Telemetry Server] client disconnected ({len(self._clients)} clients)")
 
     # ---------------- logging ----------------
     
@@ -430,7 +428,7 @@ class TelemetryServer:
             if isinstance(value, bool):
                 value = int(value)
             
-            def _push(utc, key, value, source, push_to_gui, inhibited=None):
+            def _push(utc, key, value, element, source, push_to_gui, inhibited=None):
                 try:
                     if self.is_running:
                         if self.buffer_interval and not immediate:
@@ -450,7 +448,7 @@ class TelemetryServer:
                             self.csv_writer.writerow((utc, key, value, source, inhibited))
                 except Exception as e:
                     _, _, tb = sys.exc_info()
-                    print_out(f"[TelemetryServer] Push Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+                    print_out(f"[Telemetry Server] Push Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
             
             if element != None:
                 if element.element_class == 'Actuator':
@@ -461,15 +459,15 @@ class TelemetryServer:
                         inhibited = [any(not bool(elem.value) for elem in state.armed_by) or any(bool(elem.value) for elem in state.disarmed_by) or element.states_index[value] not in state.transition_from for state in element.states_index]
                         
                     if element.element_class in ['State', 'Actuator']: # Write preactuation state to show actuation on a graph as a step instead of a long slope
-                        _push(utc-1, key, element.value, source, False)
+                        _push(utc-1, key, element.value, element, source, False)
                     
                 element.value = value
-            _push(utc, key, value, source, push_to_gui=push_to_gui, inhibited=inhibited)
+            _push(utc, key, value, element, source, push_to_gui=push_to_gui, inhibited=inhibited)
             
             
         except Exception as e:
             _, _, tb = sys.exc_info()
-            print_out(f"[TelemetryServer] Send Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[Telemetry Server] Send Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
 
     async def _broadcast(self, key, value, utc, source=None, inhibited=None):
@@ -481,13 +479,14 @@ class TelemetryServer:
                 if client in self._clients:
                     self._clients.remove(client)
 
-    # ---------------- lifecycle (mirrors OpenMCTServer) ----------------
-
     def start(self):
         try:
             if self.is_running:
-                print_out("[TelemetryServer] is already running.")
+                print_out("[Telemetry Server] is already running.")
                 return
+            
+            self._init_db()
+            self._register_routes()
 
             config = uvicorn.Config(
                 self.app,
@@ -513,16 +512,16 @@ class TelemetryServer:
                 self._flush_thread = threading.Thread(target=self._flush_loop, daemon=True)
                 self._flush_thread.start()
 
-            print_out(f"[TelemetryServer] started on port {self.port}")
+            print_out(f"[Telemetry Server] started on port {self.port}")
             
         except Exception as e:
             _, _, tb = sys.exc_info()
-            print_out(f"[TelemetryServer] Start Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[Telemetry Server] Start Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
     def stop(self, delete_db=False):
         try:
             if not self.is_running:
-                print_out("[TelemetryServer] is not running.")
+                print_out("[Telemetry Server] is not running.")
                 return
 
             if self._flush_thread:
@@ -542,11 +541,11 @@ class TelemetryServer:
             if delete_db and os.path.exists(self.db_path):
                 os.remove(self.db_path)
             
-            print_out("[TelemetryServer] stopped.")
+            print_out("[Telemetry Server] stopped.")
             
         except Exception as e:
             _, _, tb = sys.exc_info()
-            print_out(f"[TelemetryServer] Stop Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
+            print_out(f"[Telemetry Server] Stop Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
 
     def restart(self):
         self.stop()

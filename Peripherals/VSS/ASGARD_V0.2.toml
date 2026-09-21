@@ -388,7 +388,7 @@ name = "GPS Time"
 description = "GPS Time Coordinate"
 type = "gps"
 component = "time"
-unit = "unix_s"
+unit = "s"
 range = [0.0, 9_999_999_999.0]
 nominal = [0.0, 9_999_999_999.0]   # validated by staleness check, not bounds
 

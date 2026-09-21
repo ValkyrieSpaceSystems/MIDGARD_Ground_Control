@@ -1,7 +1,8 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket, platform, serial
 import numpy as np
 from queue import PriorityQueue, Queue, Empty, Full
 from datetime import datetime, UTC
+from pymavlink import mavutil
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -123,21 +124,37 @@ def _load_element_function(manufacturer: str, module_name: str, function_name: s
 
 
 class Interface:
-    def __init__(self, entry: dict):
-        self.element_class: str   = "Interface"
-        self.id: str              = entry["id"]
-        self.name: str            = entry.get("name", label(self.id))
-        self.description: str     = entry.get("description", "")
-        self.type: str            = entry["type"]
-        self.protocol: str | None = entry.get("protocol")
-        self.baud: int | None     = entry.get("baud")
-        # radio fields
-        self.freq: int | None     = entry.get("freq")
-        self.unit: str | None     = "None"
-        self.remove: bool         = entry.get("remove", False)
+    def __init__(self, entry: dict, parent):
+        self.element_class: str          = "Interface"
+        self.parent                      = parent
+        self.id: str                     = entry["id"]
+        self.name: str                   = entry.get("name", label(self.id))
+        self.description: str            = entry.get("description", "")
+        self.type: str                   = entry["type"]
+        self.protocol: str | None        = entry.get("protocol", None)
+        self.baud: int | None            = entry.get("baud")
+        self.timeout: int | float | None = entry.get("timeout", None)
+        self.remove: bool                = entry.get("remove", False)
+        self.connection                  = None
+        
+        if self.type == "serial": 
+            self.device: str | None      = entry.get("device")
+            
+        if self.type == "radio":
+            self.device: str | None      = entry.get("device")
+            self.freq: int | None        = entry.get("freq")
+            
+    def connect(self):
+        if self.protocol == "mavlink":
+            self.connection = mavutil.mavlink_connection(self.device, baud=self.baud)
+            if self.connection.wait_heartbeat(timeout=10) is None:
+                self.connection.close()
+                raise TimeoutError(f'MAVLink Initialization Error: MAVLink connection on {self.device} timedout')
+            elif self.parent.init_event.is_set():
+                print(f"Reconnected to MAVLink on {self.device}")
 
     def __repr__(self):
-        return f"Interface({self.id!r}, type={self.type!r})"
+        return f"Interface({self.id!r}, type={self.type!r}, protocol={self.protocol!r})"
 
 
 class State:
@@ -356,9 +373,11 @@ class DataStream:
         self.type: str                    = entry["type"]
         self.subtype: str | None          = entry.get("subtype", None)
         self.priority: int                = entry.get("priority", 2) #0-4
-        self.module_num: int | None       = entry.get("module", None) 
+        self.module_num: int | None       = entry.get("module", None) # NI, LabJack
         self.module                       = None
-        self.channel: int | str | None    = entry.get("channel", None) # 1, AIN0
+        self.channel: int | str | None    = entry.get("channel", None) # NI, LabJack: 1, AIN0
+        self.message_type: str | None       = entry.get("message_type", None) # MAVLink
+        self.field_name: str | None       = entry.get("field_name", None) # MAVLink
         self.unit: str | None             = entry.get("unit", None)
         self.range: tuple                 = tuple(entry.get("range", []))
         self.nominal: tuple               = tuple(entry.get("nominal", []))
@@ -370,6 +389,7 @@ class DataStream:
         self.control_type                 = None
         self.value: float | None          = None
         self.key                          = None
+        self.last_ts                      = 0
         self.remove: bool                 = entry.get("remove", False)
 
     def in_range(self) -> bool:
@@ -563,6 +583,11 @@ class Peripheral:
         self.pull_freq: int | None = meta.get("pull_freq", None)
         self.push_freq: int | None = meta.get("push_freq", None)
         
+        # ── Wroker ───────────────────────────────────────────────────────
+        self.init_event = threading.Event()
+        self.worker = None
+        self.worker_name = f"{self.name} Worker"
+        
         # ── Config Manufacturer ────────────────────────────────────────────
         if self.manufacturer == 'NI':
             self.system = nidaqmx.system.System.local()
@@ -574,7 +599,7 @@ class Peripheral:
             self.handle = ljm.openS(self.device, "ANY", "ANY")
 
         # ── Element Dicts ────────────────────────────────────────────
-        self.interfaces: dict[str, Interface] = {e["id"]: Interface(e) for e in raw.get("interface", [])}
+        self.interfaces: dict[str, Interface] = {e["id"]: Interface(e, self) for e in raw.get("interface", [])}
         self.states: dict[str, State] = {e["id"]: State(e) for e in raw.get("state", [])}
         self.actuators: dict[str, Actuator] = {e["id"]: Actuator(e, self) for e in raw.get("actuator", [])}
         self.data_streams: dict[str, DataStream] = {e["id"]: DataStream(e, self) for e in raw.get("data_stream", [])}

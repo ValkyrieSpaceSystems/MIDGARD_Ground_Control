@@ -1,7 +1,8 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket, platform, serial
 import numpy as np
 from queue import PriorityQueue, Queue, Empty, Full
 from datetime import datetime, UTC
+from pymavlink import mavutil
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +18,7 @@ import Basilisk
 
 from peripheral import Peripheral, Actuator
 from openmct import OpenMCTServer, TelemetryServer, buildOpenMCTjs
-from midgard_functions import gv, print_out, get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, check_peripherals, write_actuation, abort, unabort, shutdown
+from midgard_functions import gv, print_out, get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, check_peripherals, write_actuation, abort, unabort, shutdown, peripheral_worker, gui_worker
 
 
 '''
@@ -35,6 +36,7 @@ selectors can only be nominalized if the transition is valid. a selector can onl
 selector nominal state should have all sources in its sources list because nominalization does not check for sources. 
 
 openmct was built with npm run build and is being served by fastapi through python. sqlite is the telemetry server serving realtime and historical data. 
+openmct index.html is overwritten. if custom openmct plugins are needed, add them to the index.html in openmct_midgard. 
 
 toml default is the state midgard writes automatically at startup, a value of false is the nominal/safe position (ie normally open or normally closed is the safe state and configured in hardware to equate with a value of false)
 
@@ -60,7 +62,7 @@ put in readme: Read the manual. life and limb could be at stake if you fail to u
 # Data
 log_data = True # Boolean. Log data to csv
 log_actuations = True # Boolean. Log GUI commands to csv
-simulated_data = True # Boolean. Discards peripheral data and replaces it with fake data. Meant for testing without actual peripherals/peripheral data.
+simulated_data = False # Boolean. Discards peripheral data and replaces it with fake data. Meant for testing without actual peripherals/peripheral data.
 keep_db = False # Boolean. If False, deletes the OpenMCT SQL database containing historical telemetry data. Recommended to keep True in a production environment in case of accidents and to reload data after a MIDGARD restart, but not strictly necessary.
 keep_logs = False # Boolean. If False, deletes csv files after run. Should only be False in testing
 log_output_dir = '' # String of absolute file path. Directory where to store log files. Will attempt to make directory if it doesn't already exist. If left blank (ie ''), will use logs folder inside current working directory.
@@ -81,7 +83,8 @@ openmct_dir = '' # String of absolute file path. Directory where OpenMCT is inst
 
 # Peripherals
 peripherals = {
-    'Valhala_I':{'interface':'elrs', 'manufacturer':'VSS', 'id':'ASGARD_V0.2'},
+    #'Valhala_I':{'interface':'elrs', 'manufacturer':'VSS', 'id':'ASGARD_V0.2'},
+    'Pixhawk':{'interface':'mavlink', 'manufacturer':'default', 'id':'Pixhawk4'}
     #'nidaq':{'interface':'ethernet', 'manufacturer':'NI', 'id':'1'},
     #'labjack':{'interface':'usb', 'manufacturer':'LabJack', 'id':'1'},
 }
@@ -90,210 +93,81 @@ peripherals = {
 ### End of Condifuration Variables. Do Not Edit Further ###
 
 
-gv.peripherals = peripherals
-
-gv.log_data = log_data
-gv.log_actuations = log_actuations
-gv.simulated_data = simulated_data
-gv.keep_db = keep_db
-gv.keep_logs = keep_logs
-gv.log_output_dir = log_output_dir
-gv.print_actuations = print_actuations
-gv.show_server_logs = show_server_logs
-gv.openmct_port = openmct_port
-gv.telemetry_port = telemetry_port
-gv.confirmation_keys = confirmation_keys
-gv.debug_mode = debug_mode
-gv.health_check_interval = health_check_interval
-gv.openmct_dir = openmct_dir
-
-if gv.log_output_dir == '':
-    gv.log_output_dir = os.path.join(os.path.dirname(__file__), "logs")
-if gv.openmct_dir == '':
-    gv.openmct_dir = os.path.join(os.path.dirname(__file__), "openmct")
-
-check_configs()
-
-check_and_install_openmct() 
-
-for name, args in gv.peripherals.items():
-    gv.peripherals[name] = Peripheral(name, args) 
-    
-for p in gv.peripherals.values():
-    for elem in p.actuators.values():
-        group = elem.sync_group
-        if group:
-            gv.sync_groups.setdefault(group, []).append(elem)
-
-buildOpenMCTjs()
-gv.openmct = OpenMCTServer()
-gv.telemetry = TelemetryServer()
-
-
-def peripheral_worker(init_event):
-    try:
-        if gv.simulated_data:
-            i = 0
-            j = False
-            str_list = ['a','b','c','d','e','f','g','h','i','j','k']
-            
-        init_event.set()
-        print_out(f"[PeripheralHandler] started")
-        try:
-            while not gv.stop_event.is_set():
-                data = {}
-                if gv.simulated_data:
-                    time.sleep(0.1)
-                    sample = {}
-                    for key in gv.all_keys:
-                        element = get_element(gv.data_tree, key)
-                        if element.element_class == 'Data_Stream':
-                            if element.unit == 'bool': sample[key] = j
-                            elif element.unit == 'str': sample[key] = str_list[math.floor(i/10)]
-                            else: sample[key] = i
-                    #sample['Valhala_I.Actuator.main_lock'] = j
-                    i = 0 if i == 100 else i + 1
-                    j = not j if i == 100 else j
-                    ts = int(time.time() * 1000)
-                    data = {ts:sample}
-                else:
-                    for peripheral in gv.peripherals.values():
-                        if peripheral.manufacturer == 'NI':
-                            try:
-                                data = peripheral.data_queue.get(timeout=0.2)
-                            except Empty:
-                                continue
-                            except Exception as e:
-                                _, _, tb = sys.exc_info()
-                                print_out(f"[PeripheralHandler] NI Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
-                            
-                        elif peripheral.manufacturer == 'LabJack':
-                            try:
-                                ts_end = int(time.time() * 1000)
-                                ret = ljm.eStreamRead(peripheral.handle) # get data from labjack
-                                aData = ret[0]
-                                
-                                if not aData:
-                                    continue
-                                
-                                deinterleaved = np.array([aData[index::peripheral.numAddresses] for index in range(peripheral.numAddresses)]) # labjack returns a 1D arary, convert to 2d
-                                
-                                sensor_data = []
-                                for channel in peripheral.channels:
-                                    chanNumAbs = peripheral.channels.index(channel)
-                                    channelData = deinterleaved[chanNumAbs]
-                                    sensor_data.append(channelData)
-                                sensor_data = np.array(sensor_data).T
-                                
-                                for i, sample in enumerate(sensor_data): # Number of data samples
-                                    ts = ts_end - (len(sensor_data) - i) * (1/peripheral.pull_freq) * 1e9  # the timestamp we get is from the last data point so we need to calculate the timestamps backwards from this
-                                    data[ts] = {}
-                                    for j, channel in enumerate(peripheral.channels): # Number of channels
-                                        data[ts][channel.key] = sample[j] * channel.scale + channel.offset
-                            except Exception as e:
-                                _, _, tb = sys.exc_info()
-                                print_out(f"[PeripheralHandler] LabJack Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
-                                    
-                        elif peripheral.interface.type == 'radio':
-                            if peripheral.interface.protocol == 'mavlink':
-                                pass
-                            elif peripheral.interface.protocol == 'elrs':
-                                pass
-                
-                #print_out(data)
-                max_utc = max(data)
-                for ts, sample in sorted(data.items()):
-                    for stream_key, value in sample.items():
-                        element = get_element(gv.data_tree, stream_key)
-                        if ts == max_utc:
-                            gv.telemetry.send(ts, stream_key, value, element, "peripheral")
-                            if element.element_class in ['Actuator', 'State']:
-                                write_actuation(key, value, "peripheral", do_print=gv.print_actuations)
-                        else:
-                            gv.telemetry.send(ts, stream_key, value, element, "peripheral", push_to_gui=False)
-                
-        except Exception as e:
-            _, _, tb = sys.exc_info()
-            print_out(f"[PeripheralHandler] Read Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
-                
-    except Exception as e:
-        if not gv.stop_event.is_set():
-            _, _, tb = sys.exc_info()
-            print_out(f"[PeripheralHandler] Setup Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
-    finally: 
-        print_out(f"[PeripheralHandler] stopped")
-
-def gui_worker(init_event):
-    # Handles all user inputs from GUI
-    try:
-        for key in gv.all_keys: # Populate default values
-            element = get_element(gv.data_tree, key)
-            default = getattr(element, 'default', None)
-            if default is not None:
-                write_actuation(key, default, "auto", do_print=False)
-
-        init_event.set()
-        print_out(f"[GUIHandler] started")
-        while not gv.stop_event.is_set():
-            try:
-                cmd = gv.telemetry.command_queue.get(timeout=0.1)
-            except Empty:
-                continue
-            
-            pressed_keys = [str(k).lower() for k in cmd.get("pressed_keys", [])]
-                
-            key, requested = cmd["key"], cmd["requested"]
-
-            element = get_element(gv.data_tree, key)
-            if element is None:
-                print_out(f"[GUIHandler] Unknown GUI Key Error: '{key}'")
-                continue
-            
-            missing_keys = [k for k in gv.confirmation_keys if k not in pressed_keys]
-            write_actuation(key, requested, "user", missing_keys=gv.missing_keys, do_print=gv.print_actuations)
-                    
-                
-    except Exception as e:
-        if not gv.stop_event.is_set():
-            _, _, tb = sys.exc_info()
-            print_out(f"[GUIHandler] Initial Write Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")
-    finally: # write nominal states for all switches
-        for key in gv.all_keys: # Populate default values
-            element = get_element(gv.data_tree, key)
-            default = getattr(element, 'nominal', None)
-            if default is not None:
-                write_actuation(key, default, "auto", do_print=False)
-        print_out(f"[GUIHandler] stopped")
-
-
 def main():
     try:
+        # Set Global Variables
+        gv.peripherals = peripherals
+
+        gv.log_data = log_data
+        gv.log_actuations = log_actuations
+        gv.simulated_data = simulated_data
+        gv.keep_db = keep_db
+        gv.keep_logs = keep_logs
+        gv.log_output_dir = log_output_dir
+        gv.print_actuations = print_actuations
+        gv.show_server_logs = show_server_logs
+        gv.openmct_port = openmct_port
+        gv.telemetry_port = telemetry_port
+        gv.confirmation_keys = confirmation_keys
+        gv.debug_mode = debug_mode
+        gv.health_check_interval = health_check_interval
+        gv.openmct_dir = openmct_dir
+
+        # Set directories
+        if gv.log_output_dir == '':
+            gv.log_output_dir = os.path.join(os.path.dirname(__file__), "logs")
+        if gv.openmct_dir == '':
+            gv.openmct_dir = os.path.join(os.path.dirname(__file__), "openmct")
+
+
+        # Check Configuration Variables and OpenMCT
+        check_configs()
+        check_and_install_openmct() 
+
+
+        # Setup Peripherals
+        for name, args in gv.peripherals.items():
+            gv.peripherals[name] = Peripheral(name, args) 
+            
+        for p in gv.peripherals.values():
+            for elem in p.actuators.values():
+                group = elem.sync_group
+                if group:
+                    gv.sync_groups.setdefault(group, []).append(elem)
+
         # Check peripherals
         check_peripherals()
         
+        
+        # Setup GUI
+        buildOpenMCTjs()
+        gv.openmct = OpenMCTServer()
+        gv.telemetry = TelemetryServer()
+        
+        
         # Create servers
         gv.openmct.start()
-        gv.servers.append(("OpenMCTServer", gv.openmct))
+        gv.servers.append(("OpenMCT Server", gv.openmct))
         gv.telemetry.start()
-        gv.servers.append(("TelemetryServer", gv.telemetry))
+        gv.servers.append(("Telemetry Server", gv.telemetry))
         
-        # Create gv.threads
-        peripheral_init_event = threading.Event()
-        peripheral_handler = threading.Thread(target=peripheral_worker, name="PeripheralHandler", args=(peripheral_init_event,))
-        peripheral_handler.daemon = True
-        peripheral_handler.start()
-        gv.threads.append(("PeripheralHandler", peripheral_handler))
+        # Create gv.threads        
+        for peripheral in gv.peripherals.values():
+            peripheral.worker = threading.Thread(target=peripheral_worker, name=peripheral.worker_name, args=(peripheral,))
+            peripheral.worker.daemon = True
+            peripheral.worker.start()
+            gv.threads.append((peripheral.worker_name, peripheral.worker))
         
         gui_init_event = threading.Event()
-        gui_handler = threading.Thread(target=gui_worker, name="GUIHandler", args=(gui_init_event,))
+        gui_handler = threading.Thread(target=gui_worker, name="GUI Worker", args=(gui_init_event,))
         gui_handler.daemon = True
         gui_handler.start()
-        gv.threads.append(("GUIHandler", gui_handler))
+        gv.threads.append(("GUI Worker", gui_handler))
         
-        while not (peripheral_init_event.is_set() and gui_init_event.is_set()): # wait for all gv.threads to initialize 
+        while not (all([peripheral.init_event.is_set() for peripheral in gv.peripherals.values()]) and gui_init_event.is_set() and gv.openmct.is_running and gv.telemetry.is_running): # wait for all gv.servers and gv.threads to initialize 
             time.sleep(.1)
         
-        write_actuation(gv.peripherals['Valhala_I'].elements['flight_phase'].key, 'pad', "auto", do_print=False) ##### TEMP!!! #####
+        if 'Valhala_I' in gv.peripherals: write_actuation(gv.peripherals['Valhala_I'].elements['flight_phase'].key, 'pad', "auto", do_print=False) ##### TEMP!!! #####
         
         gv.startup_event.set()
         print_out("\n\nPress Ctrl+C to stop...\n\n")
@@ -338,17 +212,18 @@ def main():
 if __name__ == '__main__':
     main()
 
-'''
-# mavlink
 
+'''
 COMPLETED:
-    Works offline
-    Checks config variables
-        Warnings for certain config variables like debug_mode and keep_logs
+    Bug: Fixed port check error if openmct still open in browser when midgard starts
+    Made each peripheral have its own peripheral worker
+    Moved GUI and Peripheral workers to midgard_functions
+    Added data_stream support for mavlink interface devices
 
 
 TO DO
     Bugs
+        Switch states reset if editing?
 
     Configuration
         Check configurations are valid
@@ -360,13 +235,20 @@ TO DO
             Check sequences use a supported control_type
             Check that actuators have no buttons in armed_by and disarmed_by
             Check that states only have other states in their selector in transition_to
+            Check that all peripheral conditions from other peripherals are loaded
+            Check that all interface/manufacturer specific values are present
+            Check that all peripheral units are convertible
         Armed and disarmed from another peripheral
     Overseer
         Restart of MIDGARD or peripheral handling
         Peripheral communication
+        Reconnect to peripheral if connection lost
     GUI
         Add cluster control_type
+        Button that transmits a config defined thing over serial
         Restart frontend while python is running?
+        Ctrl+C in python terminal or configurable command/key in gui to trigger shutdown
+        Light mode
         Plugins
             Servo Alignment
             Map (Geofence and Course)
@@ -385,7 +267,7 @@ TO DO
         NI
         LabJack
     Other Peripherals
-        MAVLink / Ardupilot / Q Ground Control / Mission Planner / PX4 / MavProxy
+        MAVLink
         KSP (KSP OpenMCT and Telemachus Reborn https://gitlab.com/overloader-ksp/kerbal-telemetry)
         Ansys STK
         Basilisk (BSK)
