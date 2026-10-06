@@ -17,7 +17,7 @@ from labjack import ljm
 import Basilisk
 
 _G = 9.80665  # standard gravity, m/s^2
- 
+
 # unit -> (kind, scale, offset), where value_in_base_unit = value * scale + offset.
 # Only units of the same kind can be converted to each other.
 UNITS = {
@@ -167,7 +167,7 @@ def run(command, cwd=None, check=True, shell=False):
     print_out(f"\n> {' '.join(command)}")
     subprocess.run(command, cwd=cwd, check=check, shell=shell)
 
-def convert_units(value, from_unit, to_unit):
+def convert_units(element, value, from_unit, to_unit):
     """
     Convert `value` from `from_unit` to `to_unit`.
  
@@ -176,23 +176,27 @@ def convert_units(value, from_unit, to_unit):
     Raises ValueError for an unknown unit or for units of different kinds
     (e.g. "rad" -> "m").
     """
-    if from_unit == to_unit:
-        return value
- 
     try:
-        kind_from, scale_from, off_from = UNITS[from_unit]
-        kind_to, scale_to, off_to = UNITS[to_unit]
-    except KeyError as e:
-        raise ValueError(f"Unknown unit {e.args[0]!r}") from None
-    if kind_from != kind_to:
-        raise ValueError(f"Cannot convert {from_unit!r} ({kind_from}) to {to_unit!r} ({kind_to})")
- 
-    def one(v):
-        return ((v * scale_from + off_from) - off_to) / scale_to
- 
-    if isinstance(value, (list, tuple)):
-        return [one(v) for v in value]
-    return one(value)
+        if from_unit == to_unit or from_unit == None:
+            return value
+    
+        try:
+            kind_from, scale_from, off_from = UNITS[from_unit]
+            kind_to, scale_to, off_to = UNITS[to_unit]
+        except KeyError as e:
+            raise ValueError(f"Unknown unit {e.args[0]!r}") from None
+        if kind_from != kind_to:
+            raise ValueError(f"Cannot convert {from_unit!r} ({kind_from}) to {to_unit!r} ({kind_to})")
+    
+        def one(v):
+            return ((v * scale_from + off_from) - off_to) / scale_to
+    
+        if isinstance(value, (list, tuple)):
+            return [one(v) for v in value]
+        return one(value)
+    except Exception as e:
+        _, _, tb = sys.exc_info()
+        print_out(f"[{element.name}] Convert Units Error for value={value}, from_unit={from_unit}, to_unit={to_unit}: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
 
 
 # Operating Functions (Complex)
@@ -862,7 +866,7 @@ def peripheral_worker(peripheral):
                                 for field_name, elements in mavlink_lookup.get(msg_dict.get("mavpackettype"), {}).items():
                                     if field_name in msg_dict:
                                         for element in elements:
-                                            value = convert_units(msg_dict[field_name],msg.fieldunits_by_name.get(field_name),element.unit) # value, default_unit, desired_unit
+                                            value = convert_units(element, msg_dict[field_name],msg.fieldunits_by_name.get(field_name),element.unit) # value, default_unit, desired_unit
                                             data[ts][element.key] = value
                                 handle_data(data)
                                 

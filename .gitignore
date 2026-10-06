@@ -7,3 +7,5 @@ logs
 telemetry.db-shm
 telemetry.db-wal
 SF_NI_Integration32.py
+main_old.py
+mavlink_test.py

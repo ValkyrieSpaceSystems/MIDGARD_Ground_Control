@@ -18,13 +18,13 @@ import Basilisk
 
 from peripheral import Peripheral, Actuator
 from openmct import OpenMCTServer, TelemetryServer, buildOpenMCTjs
-from midgard_functions import gv, print_out, get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, check_peripherals, write_actuation, abort, unabort, shutdown, peripheral_worker, gui_worker
+from midgard_functions import gv, print_out, check_and_install_openmct, check_configs, check_peripherals, write_actuation, shutdown, peripheral_worker, gui_worker
 
 
 '''
 prerequisite installed applications, git, nodejs(https://nodejs.org/en/download), npm
 
-peripheral folder containing folders for each manufacturer, each manufacturer has files for each ID containing information about the sensors (raw data), processed data, actuators, and other variables. each system and model has a gerneric file defining system and model specific variables and default values and telling MIDGARD how to communicate with this specific device on different interfaces and what interfaces are valid (optional interfaces will be defined in the other variables setting). system folders can also contain custom sequences for that system and id files can contain whether they're valid
+peripheral folder containing folders for each manufacturer, each manufacturer has files for each ID containing information about the sensors (raw data), processed data, actuators, and other variables. each system and model has a generic file defining system and model specific variables and default values and telling MIDGARD how to communicate with this specific device on different interfaces and what interfaces are valid (optional interfaces will be defined in the other variables setting). system folders can also contain custom sequences for that system and id files can contain whether they're valid
 
 peripheral config files can inherit configs from other files in the structure parent = 'parent_file' for parent_file.toml in a manufacturer or parent = 'parent_folder/file_name' for parent_file.toml in parent_folder manufacturer
 
@@ -48,11 +48,13 @@ cannot have duplicate ids on the same peripheral
 
 currently, only switches can be tied to a physical actuator, but other control_types can call a function to actuate a switch for them. this can be expanded, but will require more control logic.
 
-if a peripheral calls an actuation, midgard will ignore the elements in to_actuate when commanding the physical actuations (digital actuation will still occur) and rely on the peripheral to make those actuations without midgard needing to instruct them. the operating procedure is to have a duplicate of all actuators on both the peripheral and midgard with the propper configuration so propogated actuations occur the same on both systems (idealy use the same config file) (ie if ASGARD calls for main_lockout set to false, ASGARD and MIDGARD set everything armed by main_lockout False independently, but MIDGARD also sets the other peripherals that rely on what this peripheral actuated)
+if a peripheral calls an actuation, midgard will ignore the elements in to_actuate when commanding the physical actuations (digital actuation will still occur) and rely on the peripheral to make those actuations without midgard needing to instruct them. the operating procedure is to have a duplicate of all actuators on both the peripheral and midgard with the proper configuration so propagated actuations occur the same on both systems (ideally use the same config file) (ie if ASGARD calls for main_lockout set to false, ASGARD and MIDGARD set everything armed by main_lockout False independently, but MIDGARD also sets the other peripherals that rely on what this peripheral actuated)
 
-functions can be tied to any actuator, but buttons, switches, and selectors are recommended (at least for now). sequences just run code and gv.threads will run the function as a thread. buttons will run a sequence every actuation (except when they become inhibited) and gv.threads will be run forever (but cant have any armed or disarmed by and the thread must handle all safety logic) (BUTTON gv.threads ARE NOT RECOMENDED!). Switches will run a sequence or thread if the value is true. Selectors will run the function if the state has do_function and will run always if no states have do_function (will run the function when nominalization occurs if nominalized state is not inhibited and do_on_nominalization is True)
+functions can be tied to any actuator, but buttons, switches, and selectors are recommended (at least for now). sequences just run code and gv.threads will run the function as a thread. buttons will run a sequence every actuation (except when they become inhibited) and gv.threads will be run forever (but cant have any armed or disarmed by and the thread must handle all safety logic) (BUTTON gv.threads ARE NOT RECOMMENDED!). Switches will run a sequence or thread if the value is true. Selectors will run the function if the state has do_function and will run always if no states have do_function (will run the function when nominalization occurs if nominalized state is not inhibited and do_on_nominalization is True)
 
 put in readme: Read the manual. life and limb could be at stake if you fail to understand how midgard actually works
+
+mavlink. for each data stream element you must specify the message type, field name, and sampling rate. mavlink returns data at the message type level, so midgard will select the fastest sampling rate from the elements of the message type. multiple elements can have the same message type and field. the mavlink protocol interface is now supported and must have a device, baud, and timeout specified. mavlink works over any serial device so its interface is type serial with protocol mavlink. this has only been tested with usb sofar, but should work with radios connected through serial
 
 '''
 
@@ -83,7 +85,7 @@ openmct_dir = '' # String of absolute file path. Directory where OpenMCT is inst
 
 # Peripherals
 peripherals = {
-    #'Valhala_I':{'interface':'elrs', 'manufacturer':'VSS', 'id':'ASGARD_V0.2'},
+    #'Valhalla_I':{'interface':'elrs', 'manufacturer':'VSS', 'id':'ASGARD_V0.2'},
     'Pixhawk':{'interface':'mavlink', 'manufacturer':'default', 'id':'Pixhawk4'}
     #'nidaq':{'interface':'ethernet', 'manufacturer':'NI', 'id':'1'},
     #'labjack':{'interface':'usb', 'manufacturer':'LabJack', 'id':'1'},
@@ -167,10 +169,10 @@ def main():
         while not (all([peripheral.init_event.is_set() for peripheral in gv.peripherals.values()]) and gui_init_event.is_set() and gv.openmct.is_running and gv.telemetry.is_running): # wait for all gv.servers and gv.threads to initialize 
             time.sleep(.1)
         
-        if 'Valhala_I' in gv.peripherals: write_actuation(gv.peripherals['Valhala_I'].elements['flight_phase'].key, 'pad', "auto", do_print=False) ##### TEMP!!! #####
+        if 'Valhalla_I' in gv.peripherals: write_actuation(gv.peripherals['Valhalla_I'].elements['flight_phase'].key, 'pad', "auto", do_print=False) ##### TEMP!!! #####
         
         gv.startup_event.set()
-        print_out("\n\nPress Ctrl+C to stop...\n\n")
+        print_out("\n\nMIDGARD Startup Complete\nPress Ctrl+C to stop...\n\n")
         while not gv.stop_event.is_set():
             try:
                 start = time.perf_counter()
@@ -215,10 +217,6 @@ if __name__ == '__main__':
 
 '''
 COMPLETED:
-    Bug: Fixed port check error if openmct still open in browser when midgard starts
-    Made each peripheral have its own peripheral worker
-    Moved GUI and Peripheral workers to midgard_functions
-    Added data_stream support for mavlink interface devices
 
 
 TO DO
@@ -236,9 +234,14 @@ TO DO
             Check that actuators have no buttons in armed_by and disarmed_by
             Check that states only have other states in their selector in transition_to
             Check that all peripheral conditions from other peripherals are loaded
-            Check that all interface/manufacturer specific values are present
+            Check that all interface/manufacturer specific values are present in each element
             Check that all peripheral units are convertible
+            Check that the peripheral can actually be communicated with
+            Check for internet access/access to specific needed websites
+            Check that NI modules type matches between config and system
         Armed and disarmed from another peripheral
+        Convert UTC to other time zone (PST, JST, Martian Sols)
+        Cooordinate transformations (ex Earth to object orbit frame or object body frame)
     Overseer
         Restart of MIDGARD or peripheral handling
         Peripheral communication
@@ -249,16 +252,28 @@ TO DO
         Restart frontend while python is running?
         Ctrl+C in python terminal or configurable command/key in gui to trigger shutdown
         Light mode
+        Limit display data rate to 10Hz (limit of human comprehension)
+        Color selecting (matching between graphs and orbits)
+        Hold to send
         Plugins
+            Slider Value Selector
+            2D Joystick
             Servo Alignment
-            Map (Geofence and Course)
-            Fuel Bar
+            Map (Geofence and Course) (Satellite?)
+                Map send long/lat to another command (https://mavlink.io/en/messages/common.html#mav_commands)
+            Fuel Bar/Gauge
+            Button with popup window for inputs
+            Boolean display indicator
     Data Handling
         Recieving data from peripherals
         Import csv logs into database
     Actuator Control
         Actuating radio peripherals
         Add servo and cluster support to functions
+    Object Peripheral
+        Types: city, coordinate, target, facility, etc
+        City lookup
+        Icon on map
     Writing
         Readme
         How to

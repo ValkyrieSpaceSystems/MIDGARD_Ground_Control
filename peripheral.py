@@ -16,7 +16,7 @@ import nidaqmx.system
 from labjack import ljm
 import Basilisk
 
-from midgard_functions import gv, print_out, get_element, combine_with_and, label, run, check_and_install_openmct, check_configs, check_peripherals, write_actuation, abort, unabort, shutdown
+from midgard_functions import gv, print_out, combine_with_and, label
 
 
 PERIPHERALS_ROOT = os.path.join(os.path.dirname(__file__), "Peripherals")
@@ -145,13 +145,17 @@ class Interface:
             self.freq: int | None        = entry.get("freq")
             
     def connect(self):
-        if self.protocol == "mavlink":
-            self.connection = mavutil.mavlink_connection(self.device, baud=self.baud)
-            if self.connection.wait_heartbeat(timeout=10) is None:
-                self.connection.close()
-                raise TimeoutError(f'MAVLink Initialization Error: MAVLink connection on {self.device} timedout')
-            elif self.parent.init_event.is_set():
-                print(f"Reconnected to MAVLink on {self.device}")
+        try:
+            if self.protocol == "mavlink":
+                self.connection = mavutil.mavlink_connection(self.device, baud=self.baud)
+                if self.connection.wait_heartbeat(timeout=10) is None:
+                    self.connection.close()
+                    raise TimeoutError(f'MAVLink Initialization Error: MAVLink connection on {self.device} timedout')
+                elif self.parent.init_event.is_set():
+                    print(f"Reconnected to MAVLink on {self.device}")
+        except Exception as e:
+            _, _, tb = sys.exc_info()
+            print_out(f"[{self.parent.display_name} {self.name}] Connection Error: {type(e).__name__} on line {tb.tb_lineno}: {e}") 
 
     def __repr__(self):
         return f"Interface({self.id!r}, type={self.type!r}, protocol={self.protocol!r})"
@@ -403,7 +407,7 @@ class DataStream:
         return self.nominal[0] <= self.value <= self.nominal[1]
 
     def __repr__(self):
-        if self.unit == None:
+        if self.unit == None or self.unit == 'bool':
             return f"DataStream({self.id!r}, type={self.type!r}, value={self.value})"
         else:
             return f"DataStream({self.id!r}, type={self.type!r}, value={self.value} {self.unit})"

@@ -12,11 +12,18 @@ name = "MAVLink"
 description = "MAVLink Interface"
 type = "serial"
 protocol = "mavlink"
-device = "/dev/ttyACM0"
+device = "udpin:localhost:14540"
 		# USB: Linux "/dev/ttyACM0" | Windows "COM5" | macOS "/dev/tty.usbmodemXXXX"
 		# Radio: the port of your ground-side radio, e.g. "/dev/ttyUSB0" or "COM7"
+		# Simulated: PX4 "udpin:localhost:14540" | ArduPilot "udpin:localhost:14551"
 baud = 115200
 timeout = 5
+
+# ── Lockouts ───────────────────────────────────────────────────────────
+[[actuator]]
+id = "abort"
+#message_type = "MAV_CMD_DO_FLIGHTTERMINATION"
+#params = [1,0,0,0,0,0,0]
 
 # ── Phases ─────────────────────────────────────────────────────────────
 [[actuator]]
@@ -65,6 +72,16 @@ parent = "flight_phase"
 transition_to = []
 sources = ["auto", "user", "peripheral"]
 
+# ── NAVIGATION ─────────────────────────────────────────────────────────
+[[actuator]]
+id = "blink_led"
+name = "Blink LED"
+description = "Blinks the onboard debug LED"
+type = "button"
+armed_by = ["lockout.main_lock"] # all must be true
+disarmed_by = ["abort.abort", "phase.startup"] # all must be false
+sources = ["auto", "user", "peripheral"]
+
 # ── POSITION ───────────────────────────────────────────────────────────
 [[data_stream]]
 id = "pos_x"
@@ -75,8 +92,8 @@ component = "x"
 unit = "m"
 range = [-50_000.0, 50_000.0]
 nominal = [-5_000.0, 5_000.0]
-message_type = ""
-field_name = ""
+message_type = "LOCAL_POSITION_NED"
+field_name = "x"
 sample_rate_hz = 100
 
 [[data_stream]]
@@ -88,8 +105,8 @@ component = "y"
 unit = "m"
 range = [-50_000.0, 50_000.0]
 nominal = [-5_000.0, 5_000.0]
-message_type = ""
-field_name = ""
+message_type = "LOCAL_POSITION_NED"
+field_name = "y"
 sample_rate_hz = 100
 
 [[data_stream]]
@@ -101,8 +118,8 @@ component = "z"
 unit = "m"
 range = [-500.0, 100_000.0]
 nominal = [0.0, 30_000.0]
-message_type = ""
-field_name = ""
+message_type = "LOCAL_POSITION_NED"
+field_name = "z"
 sample_rate_hz = 100
 
 # ── VELOCITY ───────────────────────────────────────────────────────────
@@ -115,8 +132,8 @@ component = "x"
 unit = "m/s"
 range = [-2_000.0, 2_000.0]
 nominal = [-500.0, 500.0]
-message_type = ""
-field_name = ""
+message_type = "LOCAL_POSITION_NED"
+field_name = "vx"
 sample_rate_hz = 100
 
 [[data_stream]]
@@ -128,8 +145,8 @@ component = "y"
 unit = "m/s"
 range = [-2_000.0, 2_000.0]
 nominal = [-500.0, 500.0]
-message_type = ""
-field_name = ""
+message_type = "LOCAL_POSITION_NED"
+field_name = "vy"
 sample_rate_hz = 100
 
 [[data_stream]]
@@ -141,8 +158,8 @@ component = "z"
 unit = "m/s"
 range = [-2_000.0, 2_000.0]
 nominal = [-500.0, 500.0]
-message_type = ""
-field_name = ""
+message_type = "LOCAL_POSITION_NED"
+field_name = "vz"
 sample_rate_hz = 100
 
 # ── ACCELERATION ───────────────────────────────────────────────────────
@@ -155,8 +172,8 @@ component = "x"
 unit = "m/s^2"
 range = [-160.0, 160.0]
 nominal = [-20.0, 20.0]
-message_type = ""
-field_name = ""
+message_type = "HIGHRES_IMU"
+field_name = "xacc"
 sample_rate_hz = 100
 
 [[data_stream]]
@@ -168,8 +185,8 @@ component = "y"
 unit = "m/s^2"
 range = [-160.0, 160.0]
 nominal = [-20.0, 20.0]
-message_type = ""
-field_name = ""
+message_type = "HIGHRES_IMU"
+field_name = "yacc"
 sample_rate_hz = 100
 
 [[data_stream]]
@@ -181,8 +198,8 @@ component = "z"
 unit = "m/s^2"
 range = [-160.0, 160.0]
 nominal = [-20.0, 20.0]
-message_type = ""
-field_name = ""
+message_type = "HIGHRES_IMU"
+field_name = "zacc"
 sample_rate_hz = 100
 
 # ── ATTITUDE ───────────────────────────────────────────────────────────
@@ -197,7 +214,7 @@ range = [-180.0, 180.0]
 nominal = [-30.0, 30.0]
 message_type = "ATTITUDE"
 field_name = "pitch"
-sample_rate_hz = 10 #Hz
+sample_rate_hz = 100 #Hz
 
 [[data_stream]]
 id = "roll"
@@ -210,7 +227,7 @@ range = [-180.0, 180.0]
 nominal = [-30.0, 30.0]
 message_type = "ATTITUDE"
 field_name = "roll"
-sample_rate_hz = 5 #Hz
+sample_rate_hz = 100 #Hz
 
 [[data_stream]]
 id = "yaw"
@@ -223,7 +240,47 @@ range = [-180.0, 180.0]
 nominal = [-180.0, 180.0]
 message_type = "ATTITUDE"
 field_name = "yaw"
-sample_rate_hz = 10 #Hz
+sample_rate_hz = 100 #Hz
+
+# ── ATTITUDE RATE ───────────────────────────────────────────────────────────
+[[data_stream]]
+id = "pitch_rate"
+name = "Pitch Rate"
+description = "Rotation rate along the X axis"
+type = "attitude_rate"
+component = "pitch"
+unit = "deg/s"
+range = [-180.0, 180.0]
+nominal = [-30.0, 30.0]
+message_type = "ATTITUDE"
+field_name = "pitchspeed"
+sample_rate_hz = 100 #Hz
+
+[[data_stream]]
+id = "roll_rate"
+name = "Roll Rate"
+description = "Rotation rate along the Z axis"
+type = "attitude_rate"
+component = "roll"
+unit = "deg/s"
+range = [-180.0, 180.0]
+nominal = [-30.0, 30.0]
+message_type = "ATTITUDE"
+field_name = "rollspeed"
+sample_rate_hz = 100 #Hz
+
+[[data_stream]]
+id = "yaw_rate"
+name = "Yaw Rate"
+description = "Rotation rate along the Y axis"
+type = "attitude_rate"
+component = "yaw"
+unit = "deg/s"
+range = [-180.0, 180.0]
+nominal = [-180.0, 180.0]
+message_type = "ATTITUDE"
+field_name = "yawspeed"
+sample_rate_hz = 100 #Hz
 
 # ── GPS ────────────────────────────────────────────────────────────────
 [[data_stream]]
@@ -277,3 +334,38 @@ nominal = [0.0, 9_999_999_999.0]   # validated by staleness check, not bounds
 message_type = "GLOBAL_POSITION_INT"
 field_name = "time_boot_ms"
 sample_rate_hz = 5 #Hz
+
+# ── Status ────────────────────────────────────────────────────────────────
+#[[data_stream]]
+#id = "onboard_health"
+#name = "Controller and Sensor Health"
+#description = "Shows if there are any errors in oboard sensors or controllers"
+#type = "status"
+#unit = 
+#range = [0, 1]
+#nominal = [0, 1] 
+#message_type = "SYS_STATUS"
+#field_name = "onboard_control_sensors_health"
+#sample_rate_hz = 1 #Hz
+
+[[data_stream]]
+id = "dropped_packets_rate"
+name = "Dropped Packets Rate"
+description = "Percent of packets that were lost or corrupted in transit"
+type = "status"
+unit = "%"
+range = [0, 100]
+nominal = [0, 10] 
+message_type = "SYS_STATUS"
+field_name = "drop_rate_comm"
+sample_rate_hz = 1 #Hz
+
+[[data_stream]]
+id = "dropped_packets"
+name = "Dropped Packets"
+description = "Number of packets that were lost or corrupted in transit"
+type = "status"
+unit = "int"
+message_type = "SYS_STATUS"
+field_name = "errors_comm"
+sample_rate_hz = 1 #Hz

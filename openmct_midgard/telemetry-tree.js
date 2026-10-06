@@ -143,6 +143,17 @@ var TELEMETRY_TREE = {
                                     }
                                 }
                             ]
+                        },
+                        {
+                            "name": "Button",
+                            "key": "Pixhawk.Actuator.button",
+                            "children": [
+                                {
+                                    "name": "Blink LED",
+                                    "key": "Pixhawk.Actuator.blink_led",
+                                    "trigger": true
+                                }
+                            ]
                         }
                     ]
                 },
@@ -319,6 +330,30 @@ var TELEMETRY_TREE = {
                                     "control": false,
                                     "measurement": {
                                         "units": "s",
+                                        "format": "number"
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Status",
+                            "key": "Pixhawk.Data_Stream.status",
+                            "children": [
+                                {
+                                    "name": "Dropped Packets Rate",
+                                    "key": "Pixhawk.Data_Stream.dropped_packets_rate",
+                                    "control": false,
+                                    "measurement": {
+                                        "units": "%",
+                                        "format": "number"
+                                    }
+                                },
+                                {
+                                    "name": "Dropped Packets",
+                                    "key": "Pixhawk.Data_Stream.dropped_packets",
+                                    "control": false,
+                                    "measurement": {
+                                        "units": "int",
                                         "format": "number"
                                     }
                                 }
