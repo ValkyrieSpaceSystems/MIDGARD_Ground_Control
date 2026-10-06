@@ -1,0 +1,8 @@
+services:
+  px4: # Simulated pixhawk 4
+    container_name: pixhawk
+    image: px4io/px4-sitl:latest #ardupilot/ardupilot-dev-chibios:latest
+    restart: unless-stopped
+    network_mode: host
+    stdin_open: true
+    tty: true
