@@ -294,6 +294,39 @@ var TELEMETRY_TREE = {
                             ]
                         },
                         {
+                            "name": "Attitude Rate",
+                            "key": "Pixhawk.Data_Stream.attitude_rate",
+                            "children": [
+                                {
+                                    "name": "Pitch Rate",
+                                    "key": "Pixhawk.Data_Stream.pitch_rate",
+                                    "control": false,
+                                    "measurement": {
+                                        "units": "deg/s",
+                                        "format": "number"
+                                    }
+                                },
+                                {
+                                    "name": "Roll Rate",
+                                    "key": "Pixhawk.Data_Stream.roll_rate",
+                                    "control": false,
+                                    "measurement": {
+                                        "units": "deg/s",
+                                        "format": "number"
+                                    }
+                                },
+                                {
+                                    "name": "Yaw Rate",
+                                    "key": "Pixhawk.Data_Stream.yaw_rate",
+                                    "control": false,
+                                    "measurement": {
+                                        "units": "deg/s",
+                                        "format": "number"
+                                    }
+                                }
+                            ]
+                        },
+                        {
                             "name": "Gps",
                             "key": "Pixhawk.Data_Stream.gps",
                             "children": [

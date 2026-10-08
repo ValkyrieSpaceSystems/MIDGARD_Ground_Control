@@ -22,7 +22,7 @@ from midgard_functions import gv, print_out, check_and_install_openmct, check_co
 
 
 '''
-prerequisite installed applications, git, nodejs(https://nodejs.org/en/download), npm
+prerequisite installed applications: git (https://git-scm.com/install/), Node.js/npm (Windows: https://github.com/nvm-windows/nvm, Mac/Linux: https://nodejs.org/en/download)
 
 peripheral folder containing folders for each manufacturer, each manufacturer has files for each ID containing information about the sensors (raw data), processed data, actuators, and other variables. each system and model has a generic file defining system and model specific variables and default values and telling MIDGARD how to communicate with this specific device on different interfaces and what interfaces are valid (optional interfaces will be defined in the other variables setting). system folders can also contain custom sequences for that system and id files can contain whether they're valid
 
@@ -93,7 +93,6 @@ peripherals = {
 
 
 ### End of Condifuration Variables. Do Not Edit Further ###
-
 
 def main():
     try:
@@ -198,6 +197,8 @@ def main():
                 _, _, tb = sys.exc_info()
                 print_out(f"[HealthCheck] Error: {type(e).__name__} on line {tb.tb_lineno}: {e}")# write initial display with settings
                 time.sleep(1)
+            
+        
         if not gv.stop_event.is_set():
             shutdown()
         
@@ -217,6 +218,7 @@ if __name__ == '__main__':
 
 '''
 COMPLETED:
+    Added check for prerequisite software
 
 
 TO DO
@@ -242,6 +244,8 @@ TO DO
         Armed and disarmed from another peripheral
         Convert UTC to other time zone (PST, JST, Martian Sols)
         Cooordinate transformations (ex Earth to object orbit frame or object body frame)
+        Auto install python modules
+        Auto run simulated peripherals (NI, Pixhawk, Docker, etc)
     Overseer
         Restart of MIDGARD or peripheral handling
         Peripheral communication

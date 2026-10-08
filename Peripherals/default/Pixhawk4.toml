@@ -12,7 +12,7 @@ name = "MAVLink"
 description = "MAVLink Interface"
 type = "serial"
 protocol = "mavlink"
-device = "udpin:localhost:14540"
+device = "/dev/ttyACM0"
 		# USB: Linux "/dev/ttyACM0" | Windows "COM5" | macOS "/dev/tty.usbmodemXXXX"
 		# Radio: the port of your ground-side radio, e.g. "/dev/ttyUSB0" or "COM7"
 		# Simulated: PX4 "udpin:localhost:14540" | ArduPilot "udpin:localhost:14551"
@@ -94,7 +94,7 @@ range = [-50_000.0, 50_000.0]
 nominal = [-5_000.0, 5_000.0]
 message_type = "LOCAL_POSITION_NED"
 field_name = "x"
-sample_rate_hz = 100
+sample_rate_hz = 5
 
 [[data_stream]]
 id = "pos_y"
@@ -107,7 +107,7 @@ range = [-50_000.0, 50_000.0]
 nominal = [-5_000.0, 5_000.0]
 message_type = "LOCAL_POSITION_NED"
 field_name = "y"
-sample_rate_hz = 100
+sample_rate_hz = 5
 
 [[data_stream]]
 id = "pos_z"
@@ -120,7 +120,7 @@ range = [-500.0, 100_000.0]
 nominal = [0.0, 30_000.0]
 message_type = "LOCAL_POSITION_NED"
 field_name = "z"
-sample_rate_hz = 100
+sample_rate_hz = 5
 
 # ── VELOCITY ───────────────────────────────────────────────────────────
 [[data_stream]]
@@ -134,7 +134,7 @@ range = [-2_000.0, 2_000.0]
 nominal = [-500.0, 500.0]
 message_type = "LOCAL_POSITION_NED"
 field_name = "vx"
-sample_rate_hz = 100
+sample_rate_hz = 5
 
 [[data_stream]]
 id = "vel_y"
@@ -147,7 +147,7 @@ range = [-2_000.0, 2_000.0]
 nominal = [-500.0, 500.0]
 message_type = "LOCAL_POSITION_NED"
 field_name = "vy"
-sample_rate_hz = 100
+sample_rate_hz = 5
 
 [[data_stream]]
 id = "vel_z"
@@ -160,7 +160,7 @@ range = [-2_000.0, 2_000.0]
 nominal = [-500.0, 500.0]
 message_type = "LOCAL_POSITION_NED"
 field_name = "vz"
-sample_rate_hz = 100
+sample_rate_hz = 5
 
 # ── ACCELERATION ───────────────────────────────────────────────────────
 [[data_stream]]
@@ -174,7 +174,7 @@ range = [-160.0, 160.0]
 nominal = [-20.0, 20.0]
 message_type = "HIGHRES_IMU"
 field_name = "xacc"
-sample_rate_hz = 100
+sample_rate_hz = 5
 
 [[data_stream]]
 id = "accel_y"
@@ -187,7 +187,7 @@ range = [-160.0, 160.0]
 nominal = [-20.0, 20.0]
 message_type = "HIGHRES_IMU"
 field_name = "yacc"
-sample_rate_hz = 100
+sample_rate_hz = 5
 
 [[data_stream]]
 id = "accel_z"
@@ -200,7 +200,7 @@ range = [-160.0, 160.0]
 nominal = [-20.0, 20.0]
 message_type = "HIGHRES_IMU"
 field_name = "zacc"
-sample_rate_hz = 100
+sample_rate_hz = 5
 
 # ── ATTITUDE ───────────────────────────────────────────────────────────
 [[data_stream]]
@@ -214,7 +214,7 @@ range = [-180.0, 180.0]
 nominal = [-30.0, 30.0]
 message_type = "ATTITUDE"
 field_name = "pitch"
-sample_rate_hz = 100 #Hz
+sample_rate_hz = 5 #Hz
 
 [[data_stream]]
 id = "roll"
@@ -227,7 +227,7 @@ range = [-180.0, 180.0]
 nominal = [-30.0, 30.0]
 message_type = "ATTITUDE"
 field_name = "roll"
-sample_rate_hz = 100 #Hz
+sample_rate_hz = 5 #Hz
 
 [[data_stream]]
 id = "yaw"
@@ -240,7 +240,7 @@ range = [-180.0, 180.0]
 nominal = [-180.0, 180.0]
 message_type = "ATTITUDE"
 field_name = "yaw"
-sample_rate_hz = 100 #Hz
+sample_rate_hz = 5 #Hz
 
 # ── ATTITUDE RATE ───────────────────────────────────────────────────────────
 [[data_stream]]
@@ -254,7 +254,7 @@ range = [-180.0, 180.0]
 nominal = [-30.0, 30.0]
 message_type = "ATTITUDE"
 field_name = "pitchspeed"
-sample_rate_hz = 100 #Hz
+sample_rate_hz = 5 #Hz
 
 [[data_stream]]
 id = "roll_rate"
@@ -267,7 +267,7 @@ range = [-180.0, 180.0]
 nominal = [-30.0, 30.0]
 message_type = "ATTITUDE"
 field_name = "rollspeed"
-sample_rate_hz = 100 #Hz
+sample_rate_hz = 5 #Hz
 
 [[data_stream]]
 id = "yaw_rate"
@@ -280,7 +280,7 @@ range = [-180.0, 180.0]
 nominal = [-180.0, 180.0]
 message_type = "ATTITUDE"
 field_name = "yawspeed"
-sample_rate_hz = 100 #Hz
+sample_rate_hz = 5 #Hz
 
 # ── GPS ────────────────────────────────────────────────────────────────
 [[data_stream]]

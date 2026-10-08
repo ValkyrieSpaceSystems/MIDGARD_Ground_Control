@@ -1,4 +1,4 @@
-import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket, platform, serial
+import time, csv, os, threading, sys, shutil, re, tomllib, math, pynput, csv, tomllib, importlib.util, asyncio, json, sqlite3, uvicorn, subprocess, urllib.request, urllib.error, socket, platform, serial, shlex
 import numpy as np
 from queue import PriorityQueue, Queue, Empty, Full
 from datetime import datetime, UTC
@@ -17,6 +17,10 @@ from labjack import ljm
 import Basilisk
 
 _G = 9.80665  # standard gravity, m/s^2
+
+MIN_NODE_MAJOR: int | None = None
+NODE_DOWNLOAD_URL = "https://nodejs.org/en/download"
+NVM_WINDOWS_URL = "https://github.com/nvm-windows/nvm/releases/latest"
 
 # unit -> (kind, scale, offset), where value_in_base_unit = value * scale + offset.
 # Only units of the same kind can be converted to each other.
@@ -202,6 +206,8 @@ def convert_units(element, value, from_unit, to_unit):
 # Operating Functions (Complex)
 def check_configs(): # check that all config variables are the correct format with acceptable values
     try:
+        print()
+        
         issues = []
         warnings = []
         
@@ -276,10 +282,120 @@ def check_configs(): # check that all config variables are the correct format wi
             if 'warning' in cvars:
                 if cvars['var'] in cvars['warning']['val']:
                     warnings.append(f"{cv} variable value is {cvars['var']}. {cvars['warning']['msg']}")
+                    
+        # Check for prerequisite software
+        def get_version(command: str) -> str | None:
+            """Return the output of `<command> --version`, or None if it isn't usable."""
+            # shutil.which respects PATHEXT on Windows, so "npm" resolves to npm.cmd
+            path = shutil.which(command)
+            macos_git = False
+            if command == 'git':
+                if platform.system() != "Darwin" or path != "/usr/bin/git":
+                    macos_git = False
+                try:
+                    macos_git = subprocess.run(["xcode-select", "-p"], capture_output=True).returncode != 0
+                except OSError:
+                    macos_git = False
+            
+            if path is None or macos_git:
+                return None
+            try:
+                result = subprocess.run(
+                    [path, "--version"], capture_output=True, text=True, timeout=15
+                )
+            except (OSError, subprocess.SubprocessError):
+                return None
+            if result.returncode != 0:
+                return None
+            return result.stdout.strip() or None
+        
+        def node_instructions(system: str, reason: str) -> list[str]:
+            """`reason` is a short explanation shown first, e.g. 'Node.js was not found'."""
+            
+            
+            if system == "Windows":
+                if shutil.which("nvm"):
+                    return [
+                        f"{reason}, but nvm-windows is installed.",
+                        "Run:",
+                        "  nvm install lts",
+                        "  nvm use lts",
+                    ]
+                return [
+                    f"{reason}.",
+                    f"1. Install nvm-windows (latest release): {NVM_WINDOWS_URL}",
+                    "   (download the installer from the release's Assets list and run it)",
+                    "2. Open a NEW terminal and run:",
+                    "     nvm install lts && nvm use lts",
+                    "     nvm use lts",
+                ]
+        
+            # macOS and Linux
+            return [
+                f"{reason}.",
+                f"Download and install Node.js (npm is included): {NODE_DOWNLOAD_URL}",
+            ]
+        
+        system = platform.system()  # 'Windows', 'Darwin' or 'Linux'
+    
+        # git
+        git_version = get_version("git")
+        if git_version:
+            print(f"[Git] Git installed with version {git_version}")
+        else:
+            if system == "Windows":
+                issues.append(f"SystemError: Git not installed. Download and run the installer: https://git-scm.com/download/win")
+        
+            if system == "Darwin":
+                issues.append(f"SystemError: Git not installed. Run in Terminal: 'xcode-select --install'")
+        
+            # Linux: suggest the command for whichever package manager is present
+            LINUX_PACKAGE_MANAGERS = [
+                ("apt-get", ["apt-get", "install", "-y"]),
+                ("dnf", ["dnf", "install", "-y"]),
+                ("yum", ["yum", "install", "-y"]),
+                ("pacman", ["pacman", "-S", "--noconfirm"]),
+                ("zypper", ["zypper", "--non-interactive", "install"]),
+                ("apk", ["apk", "add"]),
+            ]
+            for executable, command in LINUX_PACKAGE_MANAGERS:
+                if shutil.which(executable):
+                    issues.append(f"SystemError: Git not installed. Run: 'sudo {shlex.join(command + ['git'])}'")
+            issues.append(f"SystemError: Git not installed. Install git using your package manager: https://git-scm.com/download/linux")
+    
+        # node
+        node_version = get_version("node")
+        if system == "Windows":
+            node_install  = f"Install nvm-windows (latest release): {NVM_WINDOWS_URL}. Afterwards, open Powershell and run 'nvm install lts && nvm use lts'. After installing, close and reopen your terminal, then run this program again."
+        else:
+            node_install = f"Download and install Node.js (npm is included): {NODE_DOWNLOAD_URL}. After installing, close and reopen your terminal, then run this program again."
+        
+        if node_version is None:
+            issues.append(f"SystemError: Node.js not installed. {node_install}")
+        else:
+            try:
+                major = int(node_version.lstrip("v").split(".")[0])
+            except ValueError:
+                major = None
+            if MIN_NODE_MAJOR and major is not None and major < MIN_NODE_MAJOR:
+                reason = (
+                    f"Node.js {node_version} is installed but version "
+                    f"{MIN_NODE_MAJOR} or newer is required"
+                )
+                issues.append(f"SystemError: Node.js is too old. Version {MIN_NODE_MAJOR} or newer is required. {node_install}")
+            else:
+                print(f"[Node.js] Node.js installed with version {node_version}")
+    
+            # npm (only worth checking if node exists; it normally ships with it)
+            npm_version = get_version("npm")
+            if npm_version:
+                print(f"[NPM] NPM installed with version {npm_version}")
+            else:
+                issues.append(f"SystemError: NPM is not installed. Reinstall Node.js to install NPM. {node_install}")
 
         # Raise issues
         if warnings != []:
-            print_out(f'\nWARNING, WARNING, WARNING\n\n{"\n\n".join(warnings)}\n\nWARNING, WARNING, WARNING\n\n')
+            print_out(f'\n\nWARNING, WARNING, WARNING\n\n{"\n\n".join(warnings)}\n\nWARNING, WARNING, WARNING\n\n')
         if issues != []:
             raise Exception("\n"+"\n\n".join(issues))
         if issues == [] and warnings == []:
@@ -731,7 +847,7 @@ def peripheral_worker(peripheral):
                         if element.element_class in ['Actuator', 'State']:
                             write_actuation(key, value, "peripheral")
                         elif ts == max_utc:
-                            print_to_gui = True if ts - element.last_ts > 100 else False
+                            print_to_gui = True if ts - element.last_ts > 95 else False # Refresh at ~10Hz or less
                             gv.telemetry.send(ts, key, value, element, "peripheral", push_to_gui=print_to_gui)
                             if print_to_gui:
                                 element.last_ts = ts
