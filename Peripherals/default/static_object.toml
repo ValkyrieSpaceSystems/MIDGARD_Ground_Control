@@ -1,0 +1,44 @@
+[meta]
+name = "Static"
+description = "Generic Static Object"
+type = "static"
+
+[meta.switch_display]
+namePosition = "top"
+nameAlign = "center"
+valueAlign = "center"
+
+# ── Interfaces ─────────────────────────────────────────────────────────
+[[interface]]
+id = "static"
+name = "Static"
+description = "Static Object Interface"
+type = "static"
+
+# ── GPS ────────────────────────────────────────────────────────────────
+[[data_stream]]
+id = "gps_lat"
+name = "GPS Latitude"
+description = "GPS Latitude Coordinate"
+type = "gps"
+component = "latitude"
+unit = "deg"
+value = 0
+
+[[data_stream]]
+id = "gps_lon"
+name = "GPS Longitude"
+description = "GPS Longitude Coordinate"
+type = "gps"
+component = "longitude"
+unit = "deg"
+value = 0
+
+[[data_stream]]
+id = "gps_alt"
+name = "GPS Altitude"
+description = "GPS Altitude Coordinate"
+type = "gps"
+component = "altitude"
+unit = "m"
+value = 0

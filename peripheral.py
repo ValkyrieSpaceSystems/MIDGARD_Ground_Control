@@ -132,7 +132,7 @@ class Interface:
         self.description: str            = entry.get("description", "")
         self.type: str                   = entry["type"]
         self.protocol: str | None        = entry.get("protocol", None)
-        self.baud: int | None            = entry.get("baud")
+        self.baud: int | None            = entry.get("baud", None)
         self.timeout: int | float | None = entry.get("timeout", None)
         self.remove: bool                = entry.get("remove", False)
         self.connection                  = None
@@ -391,7 +391,7 @@ class DataStream:
         self.offset: float | int | None   = entry.get("offset",0)
         # runtime state
         self.control_type                 = None
-        self.value: float | None          = None
+        self.value: float | None          = entry.get("value", None)
         self.key                          = None
         self.last_ts                      = 0
         self.remove: bool                 = entry.get("remove", False)

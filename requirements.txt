@@ -1,0 +1,9 @@
+numpy
+pynput
+uvicorn
+pyserial
+pymavlink
+fastapi
+nidaqmx
+labjack-ljm
+bsk

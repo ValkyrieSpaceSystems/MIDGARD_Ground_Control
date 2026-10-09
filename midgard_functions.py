@@ -18,7 +18,7 @@ import Basilisk
 
 _G = 9.80665  # standard gravity, m/s^2
 
-MIN_NODE_MAJOR: int | None = None
+MIN_NODE_VERSION: list[int] | None = [24, 14, 1]
 NODE_DOWNLOAD_URL = "https://nodejs.org/en/download"
 NVM_WINDOWS_URL = "https://github.com/nvm-windows/nvm/releases/latest"
 
@@ -309,35 +309,8 @@ def check_configs(): # check that all config variables are the correct format wi
                 return None
             return result.stdout.strip() or None
         
-        def node_instructions(system: str, reason: str) -> list[str]:
-            """`reason` is a short explanation shown first, e.g. 'Node.js was not found'."""
-            
-            
-            if system == "Windows":
-                if shutil.which("nvm"):
-                    return [
-                        f"{reason}, but nvm-windows is installed.",
-                        "Run:",
-                        "  nvm install lts",
-                        "  nvm use lts",
-                    ]
-                return [
-                    f"{reason}.",
-                    f"1. Install nvm-windows (latest release): {NVM_WINDOWS_URL}",
-                    "   (download the installer from the release's Assets list and run it)",
-                    "2. Open a NEW terminal and run:",
-                    "     nvm install lts && nvm use lts",
-                    "     nvm use lts",
-                ]
-        
-            # macOS and Linux
-            return [
-                f"{reason}.",
-                f"Download and install Node.js (npm is included): {NODE_DOWNLOAD_URL}",
-            ]
-        
         system = platform.system()  # 'Windows', 'Darwin' or 'Linux'
-    
+        
         # git
         git_version = get_version("git")
         if git_version:
@@ -345,48 +318,42 @@ def check_configs(): # check that all config variables are the correct format wi
         else:
             if system == "Windows":
                 issues.append(f"SystemError: Git not installed. Download and run the installer: https://git-scm.com/download/win")
-        
-            if system == "Darwin":
+
+            elif system == "Darwin":
                 issues.append(f"SystemError: Git not installed. Run in Terminal: 'xcode-select --install'")
-        
-            # Linux: suggest the command for whichever package manager is present
-            LINUX_PACKAGE_MANAGERS = [
-                ("apt-get", ["apt-get", "install", "-y"]),
-                ("dnf", ["dnf", "install", "-y"]),
-                ("yum", ["yum", "install", "-y"]),
-                ("pacman", ["pacman", "-S", "--noconfirm"]),
-                ("zypper", ["zypper", "--non-interactive", "install"]),
-                ("apk", ["apk", "add"]),
-            ]
-            for executable, command in LINUX_PACKAGE_MANAGERS:
-                if shutil.which(executable):
-                    issues.append(f"SystemError: Git not installed. Run: 'sudo {shlex.join(command + ['git'])}'")
-            issues.append(f"SystemError: Git not installed. Install git using your package manager: https://git-scm.com/download/linux")
+            
+            elif system == "Linux":
+                # Linux: suggest the command for whichever package manager is present
+                LINUX_PACKAGE_MANAGERS = [
+                    ("apt-get", ["apt-get", "install", "-y"]),
+                    ("dnf", ["dnf", "install", "-y"]),
+                    ("yum", ["yum", "install", "-y"]),
+                    ("pacman", ["pacman", "-S", "--noconfirm"]),
+                    ("zypper", ["zypper", "--non-interactive", "install"]),
+                    ("apk", ["apk", "add"]),
+                ]
+                for executable, command in LINUX_PACKAGE_MANAGERS:
+                    if shutil.which(executable):
+                        issues.append(f"SystemError: Git not installed. Run: 'sudo {shlex.join(command + ['git'])}'")
+                issues.append(f"SystemError: Git not installed. Install git using your package manager: https://git-scm.com/download/linux")
     
         # node
         node_version = get_version("node")
         if system == "Windows":
-            node_install  = f"Install nvm-windows (latest release): {NVM_WINDOWS_URL}. Afterwards, open Powershell and run 'nvm install lts && nvm use lts'. After installing, close and reopen your terminal, then run this program again."
+            node_install  = f"Install nvm-windows (latest release): {NVM_WINDOWS_URL}. Afterwards, open Powershell as administrator and run 'nvm install lts && nvm use lts'. After installing, close and reopen your terminal, then run this program again."
         else:
             node_install = f"Download and install Node.js (npm is included): {NODE_DOWNLOAD_URL}. After installing, close and reopen your terminal, then run this program again."
         
         if node_version is None:
             issues.append(f"SystemError: Node.js not installed. {node_install}")
         else:
-            try:
-                major = int(node_version.lstrip("v").split(".")[0])
-            except ValueError:
-                major = None
-            if MIN_NODE_MAJOR and major is not None and major < MIN_NODE_MAJOR:
-                reason = (
-                    f"Node.js {node_version} is installed but version "
-                    f"{MIN_NODE_MAJOR} or newer is required"
-                )
-                issues.append(f"SystemError: Node.js is too old. Version {MIN_NODE_MAJOR} or newer is required. {node_install}")
-            else:
+            node_version = int(node_version.lstrip("v").split(".")[0])
+            if MIN_NODE_VERSION and node_version is not None and node_version >= MIN_NODE_VERSION:
+                issues.append(f"SystemError: Node.js is too old. Version {MIN_NODE_VERSION.join('.')} or newer is required. Reinstall Node.js to install a valid version. {node_install}")
+            elif node_version is not None:
                 print(f"[Node.js] Node.js installed with version {node_version}")
     
-            # npm (only worth checking if node exists; it normally ships with it)
+            # npm
             npm_version = get_version("npm")
             if npm_version:
                 print(f"[NPM] NPM installed with version {npm_version}")
@@ -394,8 +361,9 @@ def check_configs(): # check that all config variables are the correct format wi
                 issues.append(f"SystemError: NPM is not installed. Reinstall Node.js to install NPM. {node_install}")
 
         # Raise issues
+        print()
         if warnings != []:
-            print_out(f'\n\nWARNING, WARNING, WARNING\n\n{"\n\n".join(warnings)}\n\nWARNING, WARNING, WARNING\n\n')
+            print_out(f'\nWARNING, WARNING, WARNING\n\n{"\n\n".join(warnings)}\n\nWARNING, WARNING, WARNING\n\n')
         if issues != []:
             raise Exception("\n"+"\n\n".join(issues))
         if issues == [] and warnings == []:
@@ -430,11 +398,14 @@ def check_and_install_openmct(): # check that openmct is installedp properly and
                     headers["Authorization"] = f"Bearer {token}"
             
                 req = urllib.request.Request(f"https://api.github.com/repos/nasa/openmct/releases/latest", headers=headers)
-                with urllib.request.urlopen(req) as response:
-                    latest_version = json.loads(response.read().decode()).get("tag_name")
-                    if latest_version != installed_version:
-                        print_out(installed_version)
-                        print_out(f"[InstallOpenMCT] new version of OpenMCT available [{latest_version}]. To install, delete openmct folder and restart")
+                try:
+                    with urllib.request.urlopen(req) as response:
+                        latest_version = json.loads(response.read().decode()).get("tag_name")
+                        if latest_version != installed_version:
+                            print_out(installed_version)
+                            print_out(f"[InstallOpenMCT] new version of OpenMCT available [{latest_version}]. To install, delete openmct folder and restart")
+                except OSError: 
+                    raise OSError(f"[InstallOpenMCT] No interenet access to download OpenMCT. {type(e).__name__} on line {tb.tb_lineno}: {e}")
         
         except urllib.error.URLError:
             pass
@@ -445,13 +416,6 @@ def check_and_install_openmct(): # check that openmct is installedp properly and
     else:
         # Install OpenMCT
         try:
-            if shutil.which('git') is None:
-                raise RuntimeError("Git is not installed or is not available in PATH.")
-            if shutil.which("node") is None:
-                raise RuntimeError("Node.js is not installed. Install Node.js 24+ from https://nodejs.org/en/download and run this again.")
-            if shutil.which("npm") is None:
-                raise RuntimeError("npm is not installed or is not available in PATH.")
-            
             print_out(f"[Install OpenMCT] OpenMCT directory not found. Installing OpenMCT at {str(gv.openmct_dir)}")
             
             run(["git", "clone", "https://github.com/nasa/openmct.git", str(gv.openmct_dir)])
