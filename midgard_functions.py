@@ -349,7 +349,7 @@ def check_configs(): # check that all config variables are the correct format wi
         else:
             node_version = [int(ver) for ver in node_version.lstrip("v").split(".")]
             if MIN_NODE_VERSION and node_version is not None and node_version >= MIN_NODE_VERSION:
-                issues.append(f"SystemError: Node.js is too old. Version {MIN_NODE_VERSION.join('.')} or newer is required. Reinstall Node.js to install a valid version. {node_install}")
+                issues.append(f"SystemError: Node.js is too old. Version {".".join(MIN_NODE_VERSION)} or newer is required. Reinstall Node.js to install a valid version. {node_install}")
             elif node_version is not None:
                 print(f"[Node.js] Node.js installed with version {node_version}")
     
